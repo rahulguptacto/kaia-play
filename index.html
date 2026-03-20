@@ -13,11 +13,11 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,syste
 #app{width:100%;height:100%;display:flex;flex-direction:column;}
 #stage{flex:1;position:relative;overflow:hidden;cursor:pointer;}
 
-/* ── Splash screen to unlock audio ── */
 #splash{position:fixed;inset:0;z-index:9999;background:linear-gradient(135deg,#FFB6C1,#E6B0FA,#87CEEB);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;cursor:pointer;}
-#splash .big-emoji{font-size:120px;animation:splashBounce 1s ease-in-out infinite alternate;}
-#splash .tap-text{font-size:24px;font-weight:800;color:white;text-shadow:0 2px 8px rgba(0,0,0,0.2);animation:splashPulse 1.5s ease-in-out infinite;}
 #splash.hidden{display:none;}
+#splash .big-emoji{font-size:120px;animation:splashBounce 1s ease-in-out infinite alternate;}
+#splash .tap-text{font-size:28px;font-weight:800;color:white;text-shadow:0 2px 8px rgba(0,0,0,0.2);animation:splashPulse 1.5s ease-in-out infinite;}
+#splash .loading{font-size:18px;color:rgba(255,255,255,0.8);display:none;}
 
 .char-slot{position:absolute;display:flex;flex-direction:column;align-items:center;cursor:pointer;padding:8px;transition:left 3s ease-in-out,bottom 3s ease-in-out,transform 0.2s ease-out,opacity 0.15s ease-out;filter:drop-shadow(0 4px 8px rgba(0,0,0,0.3));}
 .char-slot.active{filter:drop-shadow(0 0 20px rgba(255,255,100,0.7));}
@@ -52,9 +52,7 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,syste
 .learn-prompt.show{display:flex;align-items:center;gap:10px;}
 .learn-prompt .prompt-emoji{font-size:40px;}
 .learn-prompt .prompt-color{width:40px;height:40px;border-radius:50%;border:3px solid white;}
-
 #stars-container{position:absolute;top:10px;right:10px;display:flex;gap:1px;flex-wrap:wrap;max-width:120px;z-index:100;}
-
 .dj-booth{position:absolute;top:10px;left:10px;z-index:90;display:none;animation:djBounce 0.5s ease-in-out infinite alternate;}
 .dj-booth.show{display:block;}
 
@@ -75,32 +73,44 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,syste
 </head>
 <body>
 <div id="app">
-  <!-- Splash screen: unlocks BOTH audio contexts on iOS with a single tap -->
   <div id="splash">
     <div class="big-emoji">🌸</div>
-    <div class="tap-text">Tap to Start!</div>
+    <div class="tap-text">Tap to Play!</div>
     <div class="big-emoji" style="font-size:60px;animation-delay:0.3s;">🎵 ✨ 🐱</div>
+    <div class="loading" id="splash-loading">Loading sounds...</div>
   </div>
   <div id="stage"></div>
   <div id="bar"></div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
 <script>
-// ═══════════════════════════════════════════════════
-// iOS AUDIO UNLOCK
-// On iOS, BOTH speechSynthesis AND AudioContext must
-// be triggered from the SAME synchronous user gesture.
-// The splash screen tap handles this.
-// ═══════════════════════════════════════════════════
-let audioUnlocked = false;
-let voiceUnlocked = false;
+/*
+ * ═══════════════════════════════════════════════════════════════
+ * iOS AUDIO FIX:
+ * 
+ * iOS Safari requires BOTH of these to happen in the SAME
+ * synchronous user gesture (touchstart/click):
+ *   1. speechSynthesis.speak() — unlocks Web Speech API
+ *   2. Tone.start() — unlocks Web Audio API (AudioContext)
+ *
+ * The splash screen handles this. We:
+ *   1. Call speechSynthesis.speak() SYNCHRONOUSLY in the handler
+ *   2. Call Tone.start() SYNCHRONOUSLY (returns a promise but
+ *      the AudioContext unlock happens synchronously)
+ *   3. AWAIT initAudio() to create all synths
+ *   4. THEN hide splash — so audioReady is guaranteed true
+ *      before the user can interact with the stage
+ * ═══════════════════════════════════════════════════════════════
+ */
+
+let audioReady = false;
+let voiceReady = false;
 let selectedVoice = null;
 
-// Load voices early
+// ── Load voices early and aggressively ──
 function loadVoices() {
   const voices = speechSynthesis.getVoices();
-  if (!voices.length) return;
-  // Peppy, higher-energy voices preferred
+  if (!voices.length) return false;
   selectedVoice =
     voices.find(v => v.name === 'Samantha') ||
     voices.find(v => v.name === 'Tessa') ||
@@ -108,168 +118,308 @@ function loadVoices() {
     voices.find(v => v.lang === 'en-US' && v.localService) ||
     voices.find(v => v.lang.startsWith('en')) ||
     voices[0];
+  return true;
 }
 loadVoices();
 if (speechSynthesis.onvoiceschanged !== undefined) {
   speechSynthesis.onvoiceschanged = loadVoices;
 }
-// Retry loading
-setTimeout(loadVoices, 200);
-setTimeout(loadVoices, 1000);
-setTimeout(loadVoices, 2000);
+setTimeout(loadVoices, 100);
+setTimeout(loadVoices, 500);
+setTimeout(loadVoices, 1500);
 
-// The critical splash tap handler — SYNCHRONOUS user gesture
-document.getElementById('splash').addEventListener('touchstart', handleSplashTap, {passive:false});
-document.getElementById('splash').addEventListener('click', handleSplashTap);
+// ── Splash tap handler ──
+const splashEl = document.getElementById('splash');
+const loadingEl = document.getElementById('splash-loading');
+let splashHandled = false;
 
-function handleSplashTap(e) {
+async function handleSplashTap(e) {
   e.preventDefault();
-  
-  // ── 1. Unlock Web Speech API (MUST be synchronous in tap handler) ──
-  if (!voiceUnlocked) {
-    loadVoices();
-    const u = new SpeechSynthesisUtterance('Hello Kaia!');
-    u.pitch = 1.7;
-    u.rate = 1.05;
+  if (splashHandled) return;
+  splashHandled = true;
+
+  // Show loading state
+  loadingEl.style.display = 'block';
+
+  // ── STEP 1: Unlock voice SYNCHRONOUSLY in this gesture ──
+  loadVoices();
+  const u = new SpeechSynthesisUtterance('Hello Kaia!');
+  u.pitch = 1.7;
+  u.rate = 1.05;
+  u.volume = 1;
+  if (selectedVoice) u.voice = selectedVoice;
+  u.onend = () => showSpeechBubble(false);
+  u.onerror = () => showSpeechBubble(false);
+  speechSynthesis.speak(u);
+  voiceReady = true;
+
+  // ── STEP 2: Unlock Tone.js AudioContext SYNCHRONOUSLY ──
+  await Tone.start();
+
+  // ── STEP 3: Create all synths (WAIT for this to complete) ──
+  await createSynths();
+  audioReady = true;
+
+  // ── STEP 4: NOW hide splash — everything is ready ──
+  splashEl.classList.add('hidden');
+  showSpeechBubble(true);
+}
+
+splashEl.addEventListener('touchstart', handleSplashTap, { passive: false });
+splashEl.addEventListener('click', handleSplashTap);
+
+// ═══════════════════════════════════════════════════
+// VOICE — simple, reliable
+// ═══════════════════════════════════════════════════
+function sayText(text, pitch, rate) {
+  if (!voiceReady) return;
+  loadVoices();
+  speechSynthesis.cancel();
+  setTimeout(() => {
+    const u = new SpeechSynthesisUtterance(text);
+    u.pitch = Math.min(Math.max(pitch || 1.7, 0.1), 2);
+    u.rate = Math.min(Math.max(rate || 1.05, 0.1), 2);
     u.volume = 1;
     if (selectedVoice) u.voice = selectedVoice;
     u.onstart = () => showSpeechBubble(true);
-    u.onend = () => { showSpeechBubble(false); voiceUnlocked = true; };
-    u.onerror = () => { showSpeechBubble(false); voiceUnlocked = true; };
+    u.onend = () => showSpeechBubble(false);
+    u.onerror = () => showSpeechBubble(false);
     speechSynthesis.speak(u);
-    voiceUnlocked = true;
-  }
-  
-  // ── 2. Unlock Tone.js AudioContext ──
-  Tone.start().then(() => {
-    audioUnlocked = true;
-    initAudio();
-  });
-  
-  // Hide splash
-  document.getElementById('splash').classList.add('hidden');
+  }, 80);
 }
 
 // ═══════════════════════════════════════════════════
-// VOICE ENGINE — peppy, high energy for a 2-year-old
+// TONE.JS — synth creation separated from unlock
 // ═══════════════════════════════════════════════════
-const Voice = {
-  say(text, pitch, rate) {
-    if (!voiceUnlocked) return;
-    loadVoices();
-    speechSynthesis.cancel();
-    // Small delay after cancel for iOS
-    setTimeout(() => {
-      const u = new SpeechSynthesisUtterance(text);
-      u.pitch = Math.min(Math.max(pitch || 1.7, 0.1), 2);  // Higher pitch = peppier
-      u.rate = Math.min(Math.max(rate || 1.05, 0.1), 2);    // Slightly faster = more energy
-      u.volume = 1;
-      if (selectedVoice) u.voice = selectedVoice;
-      u.onstart = () => showSpeechBubble(true);
-      u.onend = () => showSpeechBubble(false);
-      u.onerror = () => showSpeechBubble(false);
-      speechSynthesis.speak(u);
-    }, 80);
+let xylo, bell, bounce, pluck, sparkSynth, whoosh, kick, hat, bass, pad;
+
+async function createSynths() {
+  xylo = new Tone.Synth({oscillator:{type:'sine'},envelope:{attack:0.001,decay:0.35,sustain:0,release:0.25},volume:-3}).toDestination();
+  const xv = new Tone.Reverb({decay:1.2,wet:0.25}).toDestination();
+  xylo.disconnect(); xylo.connect(xv);
+  bell = new Tone.PolySynth(Tone.Synth,{oscillator:{type:'triangle'},envelope:{attack:0.008,decay:0.5,sustain:0.08,release:0.7},volume:-5}).toDestination();
+  bounce = new Tone.MembraneSynth({pitchDecay:0.06,octaves:5,volume:-8}).toDestination();
+  pluck = new Tone.PluckSynth({volume:-4}).toDestination();
+  sparkSynth = new Tone.Synth({oscillator:{type:'sine'},envelope:{attack:0.001,decay:0.15,sustain:0,release:0.1},volume:-6}).toDestination();
+  const sv = new Tone.Reverb({decay:2,wet:0.4}).toDestination();
+  sparkSynth.disconnect(); sparkSynth.connect(sv);
+  whoosh = new Tone.NoiseSynth({noise:{type:'pink'},envelope:{attack:0.05,decay:0.25,sustain:0,release:0.1},volume:-14}).toDestination();
+  kick = new Tone.MembraneSynth({pitchDecay:0.05,octaves:6,volume:-10}).toDestination();
+  hat = new Tone.NoiseSynth({noise:{type:'white'},envelope:{attack:0.001,decay:0.04,sustain:0,release:0.02},volume:-18}).toDestination();
+  bass = new Tone.Synth({oscillator:{type:'triangle'},envelope:{attack:0.05,decay:0.2,sustain:0.3,release:0.15},volume:-12}).toDestination();
+  pad = new Tone.PolySynth(Tone.Synth,{oscillator:{type:'sine'},envelope:{attack:0.3,decay:0.8,sustain:0.4,release:1.0},volume:-20}).toDestination();
+}
+
+const SFX = {
+  tap(xR) {
+    if (!audioReady) return;
+    const s = ['C4','D4','E4','G4','A4','C5','D5','E5','G5','A5','C6'];
+    xylo.triggerAttackRelease(s[Math.min(Math.floor(xR * s.length), s.length - 1)], '8n');
+  },
+  peekHide() {
+    if (!audioReady) return;
+    const n = Tone.now();
+    ['G5','E5','C5','G4'].forEach((x,i) => sparkSynth.triggerAttackRelease(x, 0.1, n + i * 0.08));
+    whoosh.triggerAttackRelease('8n', n + 0.1);
+  },
+  peekReveal() {
+    if (!audioReady) return;
+    const n = Tone.now();
+    bounce.triggerAttackRelease('C2', '4n', n);
+    ['C4','E4','G4','C5','E5','G5','C6'].forEach((x,i) => bell.triggerAttackRelease([x], 0.1, n + i * 0.06));
+  },
+  danceBeat() {
+    if (!audioReady) return;
+    bounce.triggerAttackRelease('C2', '16n');
+    xylo.triggerAttackRelease(['C5','D5','E5','G5','A5'][Math.floor(Math.random()*5)], '16n', Tone.now() + 0.05);
+  },
+  jumpUp() {
+    if (!audioReady) return;
+    const n = Tone.now();
+    ['C4','E4','G4','C5','E5'].forEach((x,i) => sparkSynth.triggerAttackRelease(x, 0.08, n + i * 0.04));
+    whoosh.triggerAttackRelease('16n', n);
+  },
+  jumpLand() {
+    if (!audioReady) return;
+    bounce.triggerAttackRelease('C2', '8n');
+    setTimeout(() => bell.triggerAttackRelease(['C4','E4','G4'], 0.15), 100);
+  },
+  spinSound() {
+    if (!audioReady) return;
+    const n = Tone.now();
+    whoosh.triggerAttackRelease('4n', n);
+    ['C5','D5','E5','F5','G5','A5','B5','C6'].forEach((x,i) => sparkSynth.triggerAttackRelease(x, 0.06, n + i * 0.08));
+  },
+  wiggle() {
+    if (!audioReady) return;
+    const n = Tone.now();
+    ['E5','G5','E5','G5','E5','G5','C6'].forEach((x,i) => xylo.triggerAttackRelease(x, '32n', n + i * 0.07));
+  },
+  celebration() {
+    if (!audioReady) return;
+    const n = Tone.now();
+    bounce.triggerAttackRelease('C2', '4n', n);
+    ['C4','E4','G4','C5'].forEach((x,i) => bell.triggerAttackRelease([x], 0.15, n + i * 0.1));
+    setTimeout(() => ['E5','G5','C6','E6'].forEach((x,i) => sparkSynth.triggerAttackRelease(x, 0.1, Tone.now() + i * 0.06)), 400);
+  },
+  correct() {
+    if (!audioReady) return;
+    const n = Tone.now();
+    ['C5','E5','G5','C6'].forEach((x,i) => bell.triggerAttackRelease([x], 0.12, n + i * 0.08));
+  },
+  wrong() {
+    if (!audioReady) return;
+    bounce.triggerAttackRelease('E2', '8n');
+  },
+  charVoice(id) {
+    if (!audioReady) return;
+    const n = Tone.now();
+    const p = {
+      luna: () => ['E5','G5','B5','E6'].forEach((x,i) => bell.triggerAttackRelease([x], 0.15, n + i * 0.09)),
+      benny: () => { bounce.triggerAttackRelease('C2', '8n', n); setTimeout(() => bell.triggerAttackRelease(['C4','E4','G4'], 0.2), 150); },
+      sunny: () => ['C5','E5','G5','C6','E6'].forEach((x,i) => sparkSynth.triggerAttackRelease(x, 0.12, n + i * 0.07)),
+      pippa: () => ['G4','E4','G4','C5','E5'].forEach((x,i) => pluck.triggerAttack(x, n + i * 0.1)),
+      rosie: () => ['C4','E4','G4','B4','D5','G5'].forEach((x,i) => bell.triggerAttackRelease([x], 0.12, n + i * 0.08)),
+    };
+    (p[id] || p.luna)();
   }
 };
 
-// ═══════════════════════════════════════════════════
-// TONE.JS SOUND ENGINE
-// ═══════════════════════════════════════════════════
-let audioReady=false, xylo, bell, bounce, pluck, sparkSynth, whoosh, kick, hat, bass, pad;
-async function initAudio(){
-  if(audioReady)return;
-  xylo=new Tone.Synth({oscillator:{type:'sine'},envelope:{attack:0.001,decay:0.35,sustain:0,release:0.25},volume:-3}).toDestination();
-  const xv=new Tone.Reverb({decay:1.2,wet:0.25}).toDestination();xylo.disconnect();xylo.connect(xv);
-  bell=new Tone.PolySynth(Tone.Synth,{oscillator:{type:'triangle'},envelope:{attack:0.008,decay:0.5,sustain:0.08,release:0.7},volume:-5}).toDestination();
-  bounce=new Tone.MembraneSynth({pitchDecay:0.06,octaves:5,volume:-8}).toDestination();
-  pluck=new Tone.PluckSynth({volume:-4}).toDestination();
-  sparkSynth=new Tone.Synth({oscillator:{type:'sine'},envelope:{attack:0.001,decay:0.15,sustain:0,release:0.1},volume:-6}).toDestination();
-  const sv=new Tone.Reverb({decay:2,wet:0.4}).toDestination();sparkSynth.disconnect();sparkSynth.connect(sv);
-  whoosh=new Tone.NoiseSynth({noise:{type:'pink'},envelope:{attack:0.05,decay:0.25,sustain:0,release:0.1},volume:-14}).toDestination();
-  kick=new Tone.MembraneSynth({pitchDecay:0.05,octaves:6,volume:-10}).toDestination();
-  hat=new Tone.NoiseSynth({noise:{type:'white'},envelope:{attack:0.001,decay:0.04,sustain:0,release:0.02},volume:-18}).toDestination();
-  bass=new Tone.Synth({oscillator:{type:'triangle'},envelope:{attack:0.05,decay:0.2,sustain:0.3,release:0.15},volume:-12}).toDestination();
-  pad=new Tone.PolySynth(Tone.Synth,{oscillator:{type:'sine'},envelope:{attack:0.3,decay:0.8,sustain:0.4,release:1.0},volume:-20}).toDestination();
-  audioReady=true;
-}
-
-const SFX={
-  tap(xR){if(!audioReady)return;const s=['C4','D4','E4','G4','A4','C5','D5','E5','G5','A5','C6'];xylo.triggerAttackRelease(s[Math.min(Math.floor(xR*s.length),s.length-1)],'8n');},
-  peekHide(){if(!audioReady)return;const n=Tone.now();['G5','E5','C5','G4'].forEach((x,i)=>sparkSynth.triggerAttackRelease(x,0.1,n+i*0.08));whoosh.triggerAttackRelease('8n',n+0.1);},
-  peekReveal(){if(!audioReady)return;const n=Tone.now();bounce.triggerAttackRelease('C2','4n',n);['C4','E4','G4','C5','E5','G5','C6'].forEach((x,i)=>bell.triggerAttackRelease([x],0.1,n+i*0.06));},
-  danceBeat(){if(!audioReady)return;bounce.triggerAttackRelease('C2','16n');xylo.triggerAttackRelease(['C5','D5','E5','G5','A5'][Math.floor(Math.random()*5)],'16n',Tone.now()+0.05);},
-  jumpUp(){if(!audioReady)return;const n=Tone.now();['C4','E4','G4','C5','E5'].forEach((x,i)=>sparkSynth.triggerAttackRelease(x,0.08,n+i*0.04));whoosh.triggerAttackRelease('16n',n);},
-  jumpLand(){if(!audioReady)return;bounce.triggerAttackRelease('C2','8n');setTimeout(()=>bell.triggerAttackRelease(['C4','E4','G4'],0.15),100);},
-  spinSound(){if(!audioReady)return;const n=Tone.now();whoosh.triggerAttackRelease('4n',n);['C5','D5','E5','F5','G5','A5','B5','C6'].forEach((x,i)=>sparkSynth.triggerAttackRelease(x,0.06,n+i*0.08));},
-  wiggle(){if(!audioReady)return;const n=Tone.now();['E5','G5','E5','G5','E5','G5','C6'].forEach((x,i)=>xylo.triggerAttackRelease(x,'32n',n+i*0.07));},
-  celebration(){if(!audioReady)return;const n=Tone.now();bounce.triggerAttackRelease('C2','4n',n);['C4','E4','G4','C5'].forEach((x,i)=>bell.triggerAttackRelease([x],0.15,n+i*0.1));setTimeout(()=>['E5','G5','C6','E6'].forEach((x,i)=>sparkSynth.triggerAttackRelease(x,0.1,Tone.now()+i*0.06)),400);},
-  correct(){if(!audioReady)return;const n=Tone.now();['C5','E5','G5','C6'].forEach((x,i)=>bell.triggerAttackRelease([x],0.12,n+i*0.08));},
-  wrong(){if(!audioReady)return;bounce.triggerAttackRelease('E2','8n');},
-  charVoice(id){if(!audioReady)return;const n=Tone.now();const p={luna:()=>['E5','G5','B5','E6'].forEach((x,i)=>bell.triggerAttackRelease([x],0.15,n+i*0.09)),benny:()=>{bounce.triggerAttackRelease('C2','8n',n);setTimeout(()=>bell.triggerAttackRelease(['C4','E4','G4'],0.2),150);},sunny:()=>['C5','E5','G5','C6','E6'].forEach((x,i)=>sparkSynth.triggerAttackRelease(x,0.12,n+i*0.07)),pippa:()=>['G4','E4','G4','C5','E5'].forEach((x,i)=>pluck.triggerAttack(x,n+i*0.1)),rosie:()=>['C4','E4','G4','B4','D5','G5'].forEach((x,i)=>bell.triggerAttackRelease([x],0.12,n+i*0.08))};(p[id]||p.luna)();}
-};
-
-function toggleMusic(mode){
-  if(!audioReady)return false;const t=Tone.getTransport();
-  if(t.state==='started'){t.stop();t.cancel();return false;}
-  if(mode==='reggaeton'){
-    t.bpm.value=95;let bi=0,mi=0;const bn=['C2','C2','G2','G2'];
-    t.scheduleRepeat(time=>kick.triggerAttackRelease('C1','16n',time),'4n');
-    t.scheduleRepeat(time=>kick.triggerAttackRelease('G1','16n',time),{interval:'4n',offset:'4n + 8n'});
-    t.scheduleRepeat(time=>hat.triggerAttackRelease('32n',time),'8n');
-    t.scheduleRepeat(time=>bass.triggerAttackRelease(bn[bi++%bn.length],'8n',time),'2n');
-    t.scheduleRepeat(time=>pluck.triggerAttack(['G4','C5','E5'][mi++%3],time),'4n');
-    t.scheduleRepeat(time=>bell.triggerAttackRelease(['C4','E4','G4'],'8n',time,0.08),'1n');
+function toggleMusic(mode) {
+  if (!audioReady) return false;
+  const t = Tone.getTransport();
+  if (t.state === 'started') { t.stop(); t.cancel(); return false; }
+  if (mode === 'reggaeton') {
+    t.bpm.value = 95;
+    let bi = 0, mi = 0;
+    const bn = ['C2','C2','G2','G2'];
+    t.scheduleRepeat(time => kick.triggerAttackRelease('C1', '16n', time), '4n');
+    t.scheduleRepeat(time => kick.triggerAttackRelease('G1', '16n', time), {interval:'4n', offset:'4n + 8n'});
+    t.scheduleRepeat(time => hat.triggerAttackRelease('32n', time), '8n');
+    t.scheduleRepeat(time => bass.triggerAttackRelease(bn[bi++ % bn.length], '8n', time), '2n');
+    t.scheduleRepeat(time => pluck.triggerAttack(['G4','C5','E5'][mi++ % 3], time), '4n');
+    t.scheduleRepeat(time => bell.triggerAttackRelease(['C4','E4','G4'], '8n', time, 0.08), '1n');
   } else {
-    t.bpm.value=112;
-    const bn=['C2','C2','F2','F2','G2','G2','C2','C2'],mn=['C5','D5','E5','G5','A5','G5','E5','D5','C5','E5','G5','A5','G5','E5','D5','C5'],ch=[['C3','E3','G3'],['F3','A3','C4'],['G3','B3','D4'],['C3','E3','G3']];
-    let bi=0,mi=0,ci=0;
-    t.scheduleRepeat(time=>kick.triggerAttackRelease('C1','8n',time),'4n');
-    t.scheduleRepeat(time=>hat.triggerAttackRelease('32n',time),'8n');
-    t.scheduleRepeat(time=>bass.triggerAttackRelease(bn[bi++%bn.length],'8n',time),'4n');
-    t.scheduleRepeat(time=>xylo.triggerAttackRelease(mn[mi++%mn.length],'8n',time),'8n');
-    t.scheduleRepeat(time=>pad.triggerAttackRelease(ch[ci++%ch.length],'2n',time,0.1),'1n');
+    t.bpm.value = 112;
+    const bn = ['C2','C2','F2','F2','G2','G2','C2','C2'];
+    const mn = ['C5','D5','E5','G5','A5','G5','E5','D5','C5','E5','G5','A5','G5','E5','D5','C5'];
+    const ch = [['C3','E3','G3'],['F3','A3','C4'],['G3','B3','D4'],['C3','E3','G3']];
+    let bi = 0, mi = 0, ci = 0;
+    t.scheduleRepeat(time => kick.triggerAttackRelease('C1', '8n', time), '4n');
+    t.scheduleRepeat(time => hat.triggerAttackRelease('32n', time), '8n');
+    t.scheduleRepeat(time => bass.triggerAttackRelease(bn[bi++ % bn.length], '8n', time), '4n');
+    t.scheduleRepeat(time => xylo.triggerAttackRelease(mn[mi++ % mn.length], '8n', time), '8n');
+    t.scheduleRepeat(time => pad.triggerAttackRelease(ch[ci++ % ch.length], '2n', time, 0.1), '1n');
   }
-  t.start();return true;
+  t.start();
+  return true;
 }
 
 // ═══════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════
-const pick=a=>a[Math.floor(Math.random()*a.length)];
+const pick = a => a[Math.floor(Math.random() * a.length)];
 
 // ═══════════════════════════════════════════════════
 // CHARACTER SVGS
 // ═══════════════════════════════════════════════════
-const CHAR_SVGS={
-luna:s=>`<svg viewBox="0 0 200 200" width="${s}" height="${s}"><path d="M 40 160 Q 10 130 20 100 Q 25 80 40 90" fill="none" stroke="#B088F9" stroke-width="8" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" values="-8 40 160;8 40 160;-8 40 160" dur="1.5s" repeatCount="indefinite"/></path><ellipse cx="100" cy="150" rx="50" ry="35" fill="#B088F9"/><ellipse cx="100" cy="155" rx="35" ry="20" fill="#E0D0FF"/><circle cx="100" cy="95" r="42" fill="#B088F9"/><polygon points="65,65 55,28 82,55" fill="#B088F9"/><polygon points="135,65 145,28 118,55" fill="#B088F9"/><polygon points="68,62 60,36 80,55" fill="#FFB6C1"/><polygon points="132,62 140,36 120,55" fill="#FFB6C1"/><circle cx="100" cy="100" r="30" fill="#E0D0FF"/><ellipse cx="87" cy="88" rx="9" ry="10" fill="#333"/><ellipse cx="113" cy="88" rx="9" ry="10" fill="#333"/><circle cx="90" cy="85" r="3.5" fill="white"/><circle cx="116" cy="85" r="3.5" fill="white"/><ellipse cx="100" cy="98" rx="4" ry="3" fill="#FF8FAB"/><path d="M 90 104 Q 100 115 110 104" fill="none" stroke="#333" stroke-width="2.5" stroke-linecap="round"/><line x1="58" y1="95" x2="78" y2="98" stroke="#ddd" stroke-width="1.5"/><line x1="56" y1="103" x2="78" y2="102" stroke="#ddd" stroke-width="1.5"/><line x1="122" y1="98" x2="142" y2="95" stroke="#ddd" stroke-width="1.5"/><line x1="122" y1="102" x2="144" y2="103" stroke="#ddd" stroke-width="1.5"/><circle cx="70" cy="68" r="5" fill="#FF6B9D"/><ellipse cx="60" cy="65" rx="9" ry="5.5" fill="#FF6B9D" transform="rotate(-20 60 65)"/><ellipse cx="78" cy="72" rx="9" ry="5.5" fill="#FF6B9D" transform="rotate(15 78 72)"/><ellipse cx="75" cy="178" rx="14" ry="8" fill="#B088F9"/><ellipse cx="125" cy="178" rx="14" ry="8" fill="#B088F9"/></svg>`,
-benny:s=>`<svg viewBox="0 0 200 200" width="${s}" height="${s}"><ellipse cx="100" cy="155" rx="52" ry="38" fill="#C8956C"/><ellipse cx="100" cy="160" rx="38" ry="22" fill="#F5DEB3"/><circle cx="100" cy="90" r="45" fill="#C8956C"/><circle cx="60" cy="55" r="18" fill="#C8956C"/><circle cx="60" cy="55" r="11" fill="#F5DEB3"/><circle cx="140" cy="55" r="18" fill="#C8956C"/><circle cx="140" cy="55" r="11" fill="#F5DEB3"/><ellipse cx="100" cy="102" rx="22" ry="16" fill="#F5DEB3"/><circle cx="85" cy="83" r="7" fill="#333"/><circle cx="115" cy="83" r="7" fill="#333"/><circle cx="87" cy="81" r="3" fill="white"/><circle cx="117" cy="81" r="3" fill="white"/><ellipse cx="100" cy="96" rx="6" ry="5" fill="#5C3D2E"/><path d="M 90 103 Q 100 114 110 103" fill="none" stroke="#5C3D2E" stroke-width="2.5" stroke-linecap="round"/><ellipse cx="100" cy="52" rx="35" ry="8" fill="#4169E1"/><rect x="78" y="25" width="44" height="28" rx="5" fill="#4169E1"/><rect x="85" y="38" width="30" height="6" rx="2" fill="#FFD700"/><ellipse cx="52" cy="140" rx="12" ry="20" fill="#C8956C" transform="rotate(-15 52 140)"><animateTransform attributeName="transform" type="rotate" values="-15 52 140;-35 52 140;-15 52 140" dur="1.2s" repeatCount="indefinite"/></ellipse><ellipse cx="148" cy="140" rx="12" ry="20" fill="#C8956C" transform="rotate(15 148 140)"><animateTransform attributeName="transform" type="rotate" values="15 148 140;35 148 140;15 148 140" dur="1.2s" repeatCount="indefinite" begin="0.3s"/></ellipse><ellipse cx="70" cy="182" rx="16" ry="10" fill="#C8956C"/><ellipse cx="130" cy="182" rx="16" ry="10" fill="#C8956C"/></svg>`,
-sunny:s=>`<svg viewBox="0 0 200 200" width="${s}" height="${s}"><circle cx="100" cy="100" r="70" fill="url(#sG)" opacity="0.25"><animate attributeName="r" values="62;72;62" dur="2s" repeatCount="indefinite"/></circle><defs><radialGradient id="sG"><stop offset="0%" stop-color="#FFD700"/><stop offset="100%" stop-color="#FFD700" stop-opacity="0"/></radialGradient></defs><polygon points="100,20 118,72 175,72 128,108 145,162 100,132 55,162 72,108 25,72 82,72" fill="#FFD700" stroke="#FFA500" stroke-width="2"><animateTransform attributeName="transform" type="rotate" values="0 100 100;5 100 100;0 100 100;-5 100 100;0 100 100" dur="3s" repeatCount="indefinite"/></polygon><polygon points="100,40 113,78 155,78 120,104 133,148 100,125 67,148 80,104 45,78 87,78" fill="#FFEC8B"/><circle cx="86" cy="88" r="6" fill="#333"/><circle cx="114" cy="88" r="6" fill="#333"/><circle cx="88" cy="86" r="2.5" fill="white"/><circle cx="116" cy="86" r="2.5" fill="white"/><circle cx="76" cy="98" r="7" fill="#FFB6C1" opacity="0.5"/><circle cx="124" cy="98" r="7" fill="#FFB6C1" opacity="0.5"/><path d="M 86 102 Q 100 118 114 102" fill="none" stroke="#333" stroke-width="2.5" stroke-linecap="round"/></svg>`,
-pippa:s=>`<svg viewBox="0 0 200 220" width="${s}" height="${s}"><ellipse cx="100" cy="140" rx="48" ry="58" fill="#2C2C54"/><ellipse cx="100" cy="148" rx="32" ry="42" fill="white"/><circle cx="100" cy="78" r="38" fill="#2C2C54"/><circle cx="86" cy="74" r="11" fill="white"/><circle cx="114" cy="74" r="11" fill="white"/><circle cx="88" cy="74" r="6" fill="#333"/><circle cx="116" cy="74" r="6" fill="#333"/><circle cx="89" cy="72" r="2.5" fill="white"/><circle cx="117" cy="72" r="2.5" fill="white"/><ellipse cx="100" cy="90" rx="8" ry="5" fill="#FFA500"/><path d="M 92 89 Q 100 96 108 89" fill="#FF8C00"/><circle cx="76" cy="86" r="6" fill="#FFB6C1" opacity="0.4"/><circle cx="124" cy="86" r="6" fill="#FFB6C1" opacity="0.4"/><ellipse cx="52" cy="135" rx="10" ry="28" fill="#2C2C54" transform="rotate(15 52 135)"><animateTransform attributeName="transform" type="rotate" values="10 52 135;30 52 135;10 52 135" dur="0.8s" repeatCount="indefinite"/></ellipse><ellipse cx="148" cy="135" rx="10" ry="28" fill="#2C2C54" transform="rotate(-15 148 135)"><animateTransform attributeName="transform" type="rotate" values="-10 148 135;-30 148 135;-10 148 135" dur="0.8s" repeatCount="indefinite" begin="0.15s"/></ellipse><ellipse cx="82" cy="198" rx="14" ry="6" fill="#FFA500"/><ellipse cx="118" cy="198" rx="14" ry="6" fill="#FFA500"/><circle cx="100" cy="112" r="4" fill="#FF6B9D"/><ellipse cx="90" cy="112" rx="8" ry="5" fill="#FF6B9D"/><ellipse cx="110" cy="112" rx="8" ry="5" fill="#FF6B9D"/></svg>`,
-rosie:s=>`<svg viewBox="0 0 200 220" width="${s}" height="${s}"><ellipse cx="75" cy="40" rx="14" ry="40" fill="#FFB6C1" transform="rotate(-10 75 40)"><animateTransform attributeName="transform" type="rotate" values="-10 75 40;-5 75 40;-10 75 40" dur="2s" repeatCount="indefinite"/></ellipse><ellipse cx="75" cy="40" rx="8" ry="30" fill="#FF8FAB" transform="rotate(-10 75 40)"/><ellipse cx="125" cy="40" rx="14" ry="40" fill="#FFB6C1" transform="rotate(10 125 40)"><animateTransform attributeName="transform" type="rotate" values="10 125 40;5 125 40;10 125 40" dur="2s" repeatCount="indefinite" begin="0.5s"/></ellipse><ellipse cx="125" cy="40" rx="8" ry="30" fill="#FF8FAB" transform="rotate(10 125 40)"/><ellipse cx="100" cy="155" rx="42" ry="35" fill="#FFB6C1"/><ellipse cx="100" cy="160" rx="30" ry="20" fill="white"/><circle cx="100" cy="95" r="40" fill="#FFB6C1"/><circle cx="85" cy="88" r="8" fill="#333"/><circle cx="115" cy="88" r="8" fill="#333"/><circle cx="87" cy="86" r="3" fill="white"/><circle cx="117" cy="86" r="3" fill="white"/><ellipse cx="100" cy="100" rx="5" ry="4" fill="#FF69B4"/><path d="M 90 106 Q 100 116 110 106" fill="none" stroke="#333" stroke-width="2" stroke-linecap="round"/><circle cx="72" cy="100" r="7" fill="#FF69B4" opacity="0.3"/><circle cx="128" cy="100" r="7" fill="#FF69B4" opacity="0.3"/><ellipse cx="70" cy="182" rx="14" ry="10" fill="#FFB6C1"/><ellipse cx="130" cy="182" rx="14" ry="10" fill="#FFB6C1"/><circle cx="80" cy="62" r="6" fill="#FFD700"/><circle cx="100" cy="57" r="6" fill="#FF6B9D"/><circle cx="120" cy="62" r="6" fill="#A855F7"/><circle cx="80" cy="62" r="3" fill="white"/><circle cx="100" cy="57" r="3" fill="white"/><circle cx="120" cy="62" r="3" fill="white"/><circle cx="142" cy="155" r="12" fill="white"/></svg>`
+const CHAR_SVGS = {
+luna: s => `<svg viewBox="0 0 200 200" width="${s}" height="${s}"><path d="M 40 160 Q 10 130 20 100 Q 25 80 40 90" fill="none" stroke="#B088F9" stroke-width="8" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" values="-8 40 160;8 40 160;-8 40 160" dur="1.5s" repeatCount="indefinite"/></path><ellipse cx="100" cy="150" rx="50" ry="35" fill="#B088F9"/><ellipse cx="100" cy="155" rx="35" ry="20" fill="#E0D0FF"/><circle cx="100" cy="95" r="42" fill="#B088F9"/><polygon points="65,65 55,28 82,55" fill="#B088F9"/><polygon points="135,65 145,28 118,55" fill="#B088F9"/><polygon points="68,62 60,36 80,55" fill="#FFB6C1"/><polygon points="132,62 140,36 120,55" fill="#FFB6C1"/><circle cx="100" cy="100" r="30" fill="#E0D0FF"/><ellipse cx="87" cy="88" rx="9" ry="10" fill="#333"/><ellipse cx="113" cy="88" rx="9" ry="10" fill="#333"/><circle cx="90" cy="85" r="3.5" fill="white"/><circle cx="116" cy="85" r="3.5" fill="white"/><ellipse cx="100" cy="98" rx="4" ry="3" fill="#FF8FAB"/><path d="M 90 104 Q 100 115 110 104" fill="none" stroke="#333" stroke-width="2.5" stroke-linecap="round"/><line x1="58" y1="95" x2="78" y2="98" stroke="#ddd" stroke-width="1.5"/><line x1="56" y1="103" x2="78" y2="102" stroke="#ddd" stroke-width="1.5"/><line x1="122" y1="98" x2="142" y2="95" stroke="#ddd" stroke-width="1.5"/><line x1="122" y1="102" x2="144" y2="103" stroke="#ddd" stroke-width="1.5"/><circle cx="70" cy="68" r="5" fill="#FF6B9D"/><ellipse cx="60" cy="65" rx="9" ry="5.5" fill="#FF6B9D" transform="rotate(-20 60 65)"/><ellipse cx="78" cy="72" rx="9" ry="5.5" fill="#FF6B9D" transform="rotate(15 78 72)"/><ellipse cx="75" cy="178" rx="14" ry="8" fill="#B088F9"/><ellipse cx="125" cy="178" rx="14" ry="8" fill="#B088F9"/></svg>`,
+benny: s => `<svg viewBox="0 0 200 200" width="${s}" height="${s}"><ellipse cx="100" cy="155" rx="52" ry="38" fill="#C8956C"/><ellipse cx="100" cy="160" rx="38" ry="22" fill="#F5DEB3"/><circle cx="100" cy="90" r="45" fill="#C8956C"/><circle cx="60" cy="55" r="18" fill="#C8956C"/><circle cx="60" cy="55" r="11" fill="#F5DEB3"/><circle cx="140" cy="55" r="18" fill="#C8956C"/><circle cx="140" cy="55" r="11" fill="#F5DEB3"/><ellipse cx="100" cy="102" rx="22" ry="16" fill="#F5DEB3"/><circle cx="85" cy="83" r="7" fill="#333"/><circle cx="115" cy="83" r="7" fill="#333"/><circle cx="87" cy="81" r="3" fill="white"/><circle cx="117" cy="81" r="3" fill="white"/><ellipse cx="100" cy="96" rx="6" ry="5" fill="#5C3D2E"/><path d="M 90 103 Q 100 114 110 103" fill="none" stroke="#5C3D2E" stroke-width="2.5" stroke-linecap="round"/><ellipse cx="100" cy="52" rx="35" ry="8" fill="#4169E1"/><rect x="78" y="25" width="44" height="28" rx="5" fill="#4169E1"/><rect x="85" y="38" width="30" height="6" rx="2" fill="#FFD700"/><ellipse cx="52" cy="140" rx="12" ry="20" fill="#C8956C" transform="rotate(-15 52 140)"><animateTransform attributeName="transform" type="rotate" values="-15 52 140;-35 52 140;-15 52 140" dur="1.2s" repeatCount="indefinite"/></ellipse><ellipse cx="148" cy="140" rx="12" ry="20" fill="#C8956C" transform="rotate(15 148 140)"><animateTransform attributeName="transform" type="rotate" values="15 148 140;35 148 140;15 148 140" dur="1.2s" repeatCount="indefinite" begin="0.3s"/></ellipse><ellipse cx="70" cy="182" rx="16" ry="10" fill="#C8956C"/><ellipse cx="130" cy="182" rx="16" ry="10" fill="#C8956C"/></svg>`,
+sunny: s => `<svg viewBox="0 0 200 200" width="${s}" height="${s}"><circle cx="100" cy="100" r="70" fill="url(#sG)" opacity="0.25"><animate attributeName="r" values="62;72;62" dur="2s" repeatCount="indefinite"/></circle><defs><radialGradient id="sG"><stop offset="0%" stop-color="#FFD700"/><stop offset="100%" stop-color="#FFD700" stop-opacity="0"/></radialGradient></defs><polygon points="100,20 118,72 175,72 128,108 145,162 100,132 55,162 72,108 25,72 82,72" fill="#FFD700" stroke="#FFA500" stroke-width="2"><animateTransform attributeName="transform" type="rotate" values="0 100 100;5 100 100;0 100 100;-5 100 100;0 100 100" dur="3s" repeatCount="indefinite"/></polygon><polygon points="100,40 113,78 155,78 120,104 133,148 100,125 67,148 80,104 45,78 87,78" fill="#FFEC8B"/><circle cx="86" cy="88" r="6" fill="#333"/><circle cx="114" cy="88" r="6" fill="#333"/><circle cx="88" cy="86" r="2.5" fill="white"/><circle cx="116" cy="86" r="2.5" fill="white"/><circle cx="76" cy="98" r="7" fill="#FFB6C1" opacity="0.5"/><circle cx="124" cy="98" r="7" fill="#FFB6C1" opacity="0.5"/><path d="M 86 102 Q 100 118 114 102" fill="none" stroke="#333" stroke-width="2.5" stroke-linecap="round"/></svg>`,
+pippa: s => `<svg viewBox="0 0 200 220" width="${s}" height="${s}"><ellipse cx="100" cy="140" rx="48" ry="58" fill="#2C2C54"/><ellipse cx="100" cy="148" rx="32" ry="42" fill="white"/><circle cx="100" cy="78" r="38" fill="#2C2C54"/><circle cx="86" cy="74" r="11" fill="white"/><circle cx="114" cy="74" r="11" fill="white"/><circle cx="88" cy="74" r="6" fill="#333"/><circle cx="116" cy="74" r="6" fill="#333"/><circle cx="89" cy="72" r="2.5" fill="white"/><circle cx="117" cy="72" r="2.5" fill="white"/><ellipse cx="100" cy="90" rx="8" ry="5" fill="#FFA500"/><path d="M 92 89 Q 100 96 108 89" fill="#FF8C00"/><circle cx="76" cy="86" r="6" fill="#FFB6C1" opacity="0.4"/><circle cx="124" cy="86" r="6" fill="#FFB6C1" opacity="0.4"/><ellipse cx="52" cy="135" rx="10" ry="28" fill="#2C2C54" transform="rotate(15 52 135)"><animateTransform attributeName="transform" type="rotate" values="10 52 135;30 52 135;10 52 135" dur="0.8s" repeatCount="indefinite"/></ellipse><ellipse cx="148" cy="135" rx="10" ry="28" fill="#2C2C54" transform="rotate(-15 148 135)"><animateTransform attributeName="transform" type="rotate" values="-10 148 135;-30 148 135;-10 148 135" dur="0.8s" repeatCount="indefinite" begin="0.15s"/></ellipse><ellipse cx="82" cy="198" rx="14" ry="6" fill="#FFA500"/><ellipse cx="118" cy="198" rx="14" ry="6" fill="#FFA500"/><circle cx="100" cy="112" r="4" fill="#FF6B9D"/><ellipse cx="90" cy="112" rx="8" ry="5" fill="#FF6B9D"/><ellipse cx="110" cy="112" rx="8" ry="5" fill="#FF6B9D"/></svg>`,
+rosie: s => `<svg viewBox="0 0 200 220" width="${s}" height="${s}"><ellipse cx="75" cy="40" rx="14" ry="40" fill="#FFB6C1" transform="rotate(-10 75 40)"><animateTransform attributeName="transform" type="rotate" values="-10 75 40;-5 75 40;-10 75 40" dur="2s" repeatCount="indefinite"/></ellipse><ellipse cx="75" cy="40" rx="8" ry="30" fill="#FF8FAB" transform="rotate(-10 75 40)"/><ellipse cx="125" cy="40" rx="14" ry="40" fill="#FFB6C1" transform="rotate(10 125 40)"><animateTransform attributeName="transform" type="rotate" values="10 125 40;5 125 40;10 125 40" dur="2s" repeatCount="indefinite" begin="0.5s"/></ellipse><ellipse cx="125" cy="40" rx="8" ry="30" fill="#FF8FAB" transform="rotate(10 125 40)"/><ellipse cx="100" cy="155" rx="42" ry="35" fill="#FFB6C1"/><ellipse cx="100" cy="160" rx="30" ry="20" fill="white"/><circle cx="100" cy="95" r="40" fill="#FFB6C1"/><circle cx="85" cy="88" r="8" fill="#333"/><circle cx="115" cy="88" r="8" fill="#333"/><circle cx="87" cy="86" r="3" fill="white"/><circle cx="117" cy="86" r="3" fill="white"/><ellipse cx="100" cy="100" rx="5" ry="4" fill="#FF69B4"/><path d="M 90 106 Q 100 116 110 106" fill="none" stroke="#333" stroke-width="2" stroke-linecap="round"/><circle cx="72" cy="100" r="7" fill="#FF69B4" opacity="0.3"/><circle cx="128" cy="100" r="7" fill="#FF69B4" opacity="0.3"/><ellipse cx="70" cy="182" rx="14" ry="10" fill="#FFB6C1"/><ellipse cx="130" cy="182" rx="14" ry="10" fill="#FFB6C1"/><circle cx="80" cy="62" r="6" fill="#FFD700"/><circle cx="100" cy="57" r="6" fill="#FF6B9D"/><circle cx="120" cy="62" r="6" fill="#A855F7"/><circle cx="80" cy="62" r="3" fill="white"/><circle cx="100" cy="57" r="3" fill="white"/><circle cx="120" cy="62" r="3" fill="white"/><circle cx="142" cy="155" r="12" fill="white"/></svg>`
 };
 
-const COOL_BUNNY_SVG=`<svg viewBox="0 0 100 120" width="80" height="96"><ellipse cx="38" cy="20" rx="10" ry="30" fill="#333" transform="rotate(-10 38 20)"/><ellipse cx="38" cy="20" rx="6" ry="22" fill="#555" transform="rotate(-10 38 20)"/><ellipse cx="62" cy="20" rx="10" ry="30" fill="#333" transform="rotate(10 62 20)"/><ellipse cx="62" cy="20" rx="6" ry="22" fill="#555" transform="rotate(10 62 20)"/><ellipse cx="50" cy="75" rx="28" ry="22" fill="#333"/><ellipse cx="50" cy="78" rx="20" ry="14" fill="#555"/><circle cx="50" cy="55" r="26" fill="#333"/><rect x="30" y="46" width="40" height="12" rx="6" fill="#FFD700" opacity="0.9"/><circle cx="40" cy="52" r="5" fill="#222"/><circle cx="60" cy="52" r="5" fill="#222"/><circle cx="40" cy="52" r="2" fill="#FFD700" opacity="0.5"/><circle cx="60" cy="52" r="2" fill="#FFD700" opacity="0.5"/><path d="M 44 64 Q 50 70 56 64" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round"/><circle cx="25" cy="50" r="12" fill="#444" stroke="#FFD700" stroke-width="2"/><circle cx="75" cy="50" r="12" fill="#444" stroke="#FFD700" stroke-width="2"/><path d="M 25 38 Q 50 32 75 38" fill="none" stroke="#444" stroke-width="4"/><text x="50" y="100" text-anchor="middle" font-size="10" fill="#FFD700" font-weight="bold">DJ</text></svg>`;
+const COOL_BUNNY_SVG = `<svg viewBox="0 0 100 120" width="80" height="96"><ellipse cx="38" cy="20" rx="10" ry="30" fill="#333" transform="rotate(-10 38 20)"/><ellipse cx="38" cy="20" rx="6" ry="22" fill="#555" transform="rotate(-10 38 20)"/><ellipse cx="62" cy="20" rx="10" ry="30" fill="#333" transform="rotate(10 62 20)"/><ellipse cx="62" cy="20" rx="6" ry="22" fill="#555" transform="rotate(10 62 20)"/><ellipse cx="50" cy="75" rx="28" ry="22" fill="#333"/><ellipse cx="50" cy="78" rx="20" ry="14" fill="#555"/><circle cx="50" cy="55" r="26" fill="#333"/><rect x="30" y="46" width="40" height="12" rx="6" fill="#FFD700" opacity="0.9"/><circle cx="40" cy="52" r="5" fill="#222"/><circle cx="60" cy="52" r="5" fill="#222"/><circle cx="40" cy="52" r="2" fill="#FFD700" opacity="0.5"/><circle cx="60" cy="52" r="2" fill="#FFD700" opacity="0.5"/><path d="M 44 64 Q 50 70 56 64" fill="none" stroke="#FFD700" stroke-width="2" stroke-linecap="round"/><circle cx="25" cy="50" r="12" fill="#444" stroke="#FFD700" stroke-width="2"/><circle cx="75" cy="50" r="12" fill="#444" stroke="#FFD700" stroke-width="2"/><path d="M 25 38 Q 50 32 75 38" fill="none" stroke="#444" stroke-width="4"/><text x="50" y="100" text-anchor="middle" font-size="10" fill="#FFD700" font-weight="bold">DJ</text></svg>`;
 
 // ═══════════════════════════════════════════════════
-// SCENES & ROUTINES
+// SCENES
 // ═══════════════════════════════════════════════════
-const SCENES=[
-  {emoji:'🌸',bg:'linear-gradient(180deg,#87CEEB 0%,#B0E0FF 35%,#90EE90 42%,#228B22 100%)',floats:['🌸','🦋','🌼','🐝','🌺','🌻','🍀','🐞']},
-  {emoji:'🌊',bg:'linear-gradient(180deg,#87CEEB 0%,#00BFFF 45%,#00CED1 52%,#FFE4B5 58%,#DEB887 100%)',floats:['🐠','🐚','🦀','🐙','🐬','🦈','🌊','🏖️']},
-  {emoji:'🚀',bg:'linear-gradient(180deg,#0B0B3B 0%,#1B1464 40%,#2E0854 100%)',floats:['⭐','🌙','🪐','🚀','👽','🌟','💫','🛸']},
-  {emoji:'🍭',bg:'linear-gradient(180deg,#FFB6C1 0%,#FFE4E1 35%,#E6B0FA 65%,#FF69B4 100%)',floats:['🍭','🍬','🧁','🍩','🎂','🍪','🍰','🎈']},
+const SCENES = [
+  {emoji:'🌸', bg:'linear-gradient(180deg,#87CEEB 0%,#B0E0FF 35%,#90EE90 42%,#228B22 100%)', floats:['🌸','🦋','🌼','🐝','🌺','🌻','🍀','🐞']},
+  {emoji:'🌊', bg:'linear-gradient(180deg,#87CEEB 0%,#00BFFF 45%,#00CED1 52%,#FFE4B5 58%,#DEB887 100%)', floats:['🐠','🐚','🦀','🐙','🐬','🦈','🌊','🏖️']},
+  {emoji:'🚀', bg:'linear-gradient(180deg,#0B0B3B 0%,#1B1464 40%,#2E0854 100%)', floats:['⭐','🌙','🪐','🚀','👽','🌟','💫','🛸']},
+  {emoji:'🍭', bg:'linear-gradient(180deg,#FFB6C1 0%,#FFE4E1 35%,#E6B0FA 65%,#FF69B4 100%)', floats:['🍭','🍬','🧁','🍩','🎂','🍪','🍰','🎈']},
 ];
 
-function getPeekaboo(){const h=pick(["Peek a boo!","Where am I?","I'm hiding!","Can you find me?"]),r=pick(["Here I am!","Boo!","Surprise!","I see you Kaia!","Ta da!"]);return [{d:400,s:{transform:'scale(0.7) rotate(8deg)',opacity:'0.7'},sfx:()=>SFX.peekHide(),speak:h},{d:350,s:{transform:'scale(0.3) rotate(-5deg)',opacity:'0.3'}},{d:250,s:{transform:'scale(0)',opacity:'0'}},{d:700,s:{transform:'scale(0)',opacity:'0'},overlay:'🙈'},{d:500,s:{transform:'scale(0)',opacity:'0'},overlay:'🙈'},{d:300,s:{transform:'scale(0.5)',opacity:'0.5'},sfx:()=>SFX.peekReveal(),speak:r,pitch:1.8,rate:1.15},{d:250,s:{transform:'scale(1.35)',opacity:'1'},sparkles:true},{d:200,s:{transform:'scale(0.9)',opacity:'1'},sparkles:true},{d:250,s:{transform:'scale(1.05)',opacity:'1'}},{d:300,s:{transform:'scale(1)',opacity:'1'}}];}
-function getDance(){const p=pick(["Dance dance dance!","Shake shake shake!","Let's dance Kaia!","Wiggle wiggle!","Everybody dance!"]);const steps=[{d:300,s:{transform:'rotate(0deg)'},speak:p,sfx:()=>SFX.danceBeat()}];for(let i=0;i<6;i++){steps.push({d:250,s:{transform:'rotate(-14deg) translateX(-12px) translateY(-8px) scale(1.05)'},sfx:i%2===0?()=>SFX.danceBeat():null});steps.push({d:250,s:{transform:'rotate(14deg) translateX(12px) translateY(-12px) scale(1.05)'},sfx:i%2===1?()=>SFX.danceBeat():null});}steps.push({d:300,s:{transform:'rotate(180deg) scale(1.1)'},sfx:()=>SFX.spinSound(),speak:'Wheee!',pitch:1.9,rate:1.2});steps.push({d:300,s:{transform:'rotate(360deg) scale(1)'},sparkles:true});steps.push({d:200,s:{transform:'rotate(0deg) scale(1)'}});return steps;}
-function getJump(){const p=pick(["Jump jump jump!","Boing boing!","Up up up!","To the moon!","Wheee so high!"]);return [{d:250,s:{transform:'scaleX(1.15) scaleY(0.8) translateY(10px)'},speak:p},{d:150,s:{transform:'scaleX(1.2) scaleY(0.7) translateY(15px)'}},{d:200,s:{transform:'scaleX(0.85) scaleY(1.2) translateY(-80px)'},sfx:()=>SFX.jumpUp()},{d:300,s:{transform:'scaleX(0.9) scaleY(1.1) translateY(-100px)'},speak:'Wheee!',pitch:1.9,rate:1.2},{d:200,s:{transform:'scale(1.05) translateY(-95px)'}},{d:150,s:{transform:'scaleX(0.9) scaleY(1.1) translateY(-30px)'}},{d:100,s:{transform:'scaleX(1.25) scaleY(0.7) translateY(8px)'},sfx:()=>SFX.jumpLand(),sparkles:true},{d:200,s:{transform:'scaleX(0.95) scaleY(1.08) translateY(-25px)'}},{d:150,s:{transform:'scaleX(1.1) scaleY(0.85) translateY(4px)'}},{d:200,s:{transform:'scale(1) translateY(0)'}}];}
-function getSpin(){const p=pick(["Round and round!","Spin spin spin!","Dizzy dizzy!","Wheee spinning!"]);return [{d:50,s:{transform:'rotate(0deg) scale(1)'},speak:p,sfx:()=>SFX.spinSound()},{d:200,s:{transform:'rotate(90deg) scale(1.1)'}},{d:200,s:{transform:'rotate(180deg) scale(1.15)'}},{d:200,s:{transform:'rotate(270deg) scale(1.1)'}},{d:200,s:{transform:'rotate(360deg) scale(1.05)'},sparkles:true},{d:150,s:{transform:'rotate(540deg) scale(1.15)'},speak:'Wheee!',pitch:1.9},{d:150,s:{transform:'rotate(720deg) scale(1)'},sparkles:true},{d:200,s:{transform:'rotate(720deg) scale(1)'}}];}
-function getParty(){const p=pick(["Yay! Party time!","Hooray!","We did it!","Amazing!","Best day ever!"]);return [{d:200,s:{transform:'scaleX(1.15) scaleY(0.8) translateY(8px)'},speak:p,sfx:()=>SFX.celebration()},{d:200,s:{transform:'translateY(-60px) scale(1.1)'}},{d:200,s:{transform:'translateY(-70px) rotate(180deg) scale(1.15)'},sparkles:true},{d:200,s:{transform:'translateY(-60px) rotate(360deg) scale(1.1)'},sparkles:true},{d:150,s:{transform:'translateY(5px) scaleX(1.2) scaleY(0.75)'},sparkles:true},{d:120,s:{transform:'rotate(-15deg) scale(1.05)'},speak:'Yay!',pitch:1.9},{d:120,s:{transform:'rotate(15deg) scale(1.05)'}},{d:120,s:{transform:'rotate(-10deg) scale(1.03)'}},{d:120,s:{transform:'rotate(10deg) scale(1.03)'}},{d:200,s:{transform:'rotate(0deg) scale(1)'}}];}
+// ═══════════════════════════════════════════════════
+// ROUTINES
+// ═══════════════════════════════════════════════════
+function getPeekaboo() {
+  const h = pick(["Peek a boo!","Where am I?","I'm hiding!","Can you find me?"]);
+  const r = pick(["Here I am!","Boo!","Surprise!","I see you Kaia!","Ta da!"]);
+  return [
+    {d:400, s:{transform:'scale(0.7) rotate(8deg)',opacity:'0.7'}, sfx:()=>SFX.peekHide(), speak:h},
+    {d:350, s:{transform:'scale(0.3) rotate(-5deg)',opacity:'0.3'}},
+    {d:250, s:{transform:'scale(0)',opacity:'0'}},
+    {d:700, s:{transform:'scale(0)',opacity:'0'}, overlay:'🙈'},
+    {d:500, s:{transform:'scale(0)',opacity:'0'}, overlay:'🙈'},
+    {d:300, s:{transform:'scale(0.5)',opacity:'0.5'}, sfx:()=>SFX.peekReveal(), speak:r, pitch:1.8, rate:1.15},
+    {d:250, s:{transform:'scale(1.35)',opacity:'1'}, sparkles:true},
+    {d:200, s:{transform:'scale(0.9)',opacity:'1'}, sparkles:true},
+    {d:250, s:{transform:'scale(1.05)',opacity:'1'}},
+    {d:300, s:{transform:'scale(1)',opacity:'1'}},
+  ];
+}
+function getDance() {
+  const p = pick(["Dance dance dance!","Shake shake shake!","Let's dance Kaia!","Wiggle wiggle!","Everybody dance!"]);
+  const steps = [{d:300, s:{transform:'rotate(0deg)'}, speak:p, sfx:()=>SFX.danceBeat()}];
+  for (let i = 0; i < 6; i++) {
+    steps.push({d:250, s:{transform:'rotate(-14deg) translateX(-12px) translateY(-8px) scale(1.05)'}, sfx:i%2===0?()=>SFX.danceBeat():null});
+    steps.push({d:250, s:{transform:'rotate(14deg) translateX(12px) translateY(-12px) scale(1.05)'}, sfx:i%2===1?()=>SFX.danceBeat():null});
+  }
+  steps.push({d:300, s:{transform:'rotate(180deg) scale(1.1)'}, sfx:()=>SFX.spinSound(), speak:'Wheee!', pitch:1.9, rate:1.2});
+  steps.push({d:300, s:{transform:'rotate(360deg) scale(1)'}, sparkles:true});
+  steps.push({d:200, s:{transform:'rotate(0deg) scale(1)'}});
+  return steps;
+}
+function getJump() {
+  const p = pick(["Jump jump jump!","Boing boing!","Up up up!","To the moon!","Wheee so high!"]);
+  return [
+    {d:250, s:{transform:'scaleX(1.15) scaleY(0.8) translateY(10px)'}, speak:p},
+    {d:150, s:{transform:'scaleX(1.2) scaleY(0.7) translateY(15px)'}},
+    {d:200, s:{transform:'scaleX(0.85) scaleY(1.2) translateY(-80px)'}, sfx:()=>SFX.jumpUp()},
+    {d:300, s:{transform:'scaleX(0.9) scaleY(1.1) translateY(-100px)'}, speak:'Wheee!', pitch:1.9, rate:1.2},
+    {d:200, s:{transform:'scale(1.05) translateY(-95px)'}},
+    {d:150, s:{transform:'scaleX(0.9) scaleY(1.1) translateY(-30px)'}},
+    {d:100, s:{transform:'scaleX(1.25) scaleY(0.7) translateY(8px)'}, sfx:()=>SFX.jumpLand(), sparkles:true},
+    {d:200, s:{transform:'scaleX(0.95) scaleY(1.08) translateY(-25px)'}},
+    {d:150, s:{transform:'scaleX(1.1) scaleY(0.85) translateY(4px)'}},
+    {d:200, s:{transform:'scale(1) translateY(0)'}},
+  ];
+}
+function getSpin() {
+  const p = pick(["Round and round!","Spin spin spin!","Dizzy dizzy!","Wheee spinning!"]);
+  return [
+    {d:50, s:{transform:'rotate(0deg) scale(1)'}, speak:p, sfx:()=>SFX.spinSound()},
+    {d:200, s:{transform:'rotate(90deg) scale(1.1)'}},
+    {d:200, s:{transform:'rotate(180deg) scale(1.15)'}},
+    {d:200, s:{transform:'rotate(270deg) scale(1.1)'}},
+    {d:200, s:{transform:'rotate(360deg) scale(1.05)'}, sparkles:true},
+    {d:150, s:{transform:'rotate(540deg) scale(1.15)'}, speak:'Wheee!', pitch:1.9},
+    {d:150, s:{transform:'rotate(720deg) scale(1)'}, sparkles:true},
+    {d:200, s:{transform:'rotate(720deg) scale(1)'}},
+  ];
+}
+function getParty() {
+  const p = pick(["Yay! Party time!","Hooray!","We did it!","Amazing!","Best day ever!"]);
+  return [
+    {d:200, s:{transform:'scaleX(1.15) scaleY(0.8) translateY(8px)'}, speak:p, sfx:()=>SFX.celebration()},
+    {d:200, s:{transform:'translateY(-60px) scale(1.1)'}},
+    {d:200, s:{transform:'translateY(-70px) rotate(180deg) scale(1.15)'}, sparkles:true},
+    {d:200, s:{transform:'translateY(-60px) rotate(360deg) scale(1.1)'}, sparkles:true},
+    {d:150, s:{transform:'translateY(5px) scaleX(1.2) scaleY(0.75)'}, sparkles:true},
+    {d:120, s:{transform:'rotate(-15deg) scale(1.05)'}, speak:'Yay!', pitch:1.9},
+    {d:120, s:{transform:'rotate(15deg) scale(1.05)'}},
+    {d:120, s:{transform:'rotate(-10deg) scale(1.03)'}},
+    {d:120, s:{transform:'rotate(10deg) scale(1.03)'}},
+    {d:200, s:{transform:'rotate(0deg) scale(1)'}},
+  ];
+}
+const ACTIONS = [{emoji:'🙈',get:getPeekaboo},{emoji:'💃',get:getDance},{emoji:'🦘',get:getJump},{emoji:'🌀',get:getSpin},{emoji:'🎉',get:getParty}];
 
-const ACTIONS=[{emoji:'🙈',get:getPeekaboo},{emoji:'💃',get:getDance},{emoji:'🦘',get:getJump},{emoji:'🌀',get:getSpin},{emoji:'🎉',get:getParty}];
-
-const AUTO_PHRASES=[
+const AUTO_PHRASES = [
   {speak:"Hi Kaia! I love you!",anim:'wave'},{speak:"Twinkle twinkle little star!",anim:'sparkle'},
   {speak:"Moo! Quack quack! Woof woof! Meow!",anim:'wiggle'},{speak:"A, B, C, D, E, F, G!",anim:'bounce'},
   {speak:"Head, shoulders, knees and toes!",anim:'wave'},{speak:"Old MacDonald had a farm, E I E I O!",anim:'wiggle'},
@@ -279,120 +429,304 @@ const AUTO_PHRASES=[
   {speak:"Baa baa black sheep, have you any wool?",anim:'wiggle'},{speak:"Rain rain go away!",anim:'wave'},
 ];
 
-function getAutoRoutine(fp){const t=fp.speak;const base={wave:[{d:200,s:{transform:'rotate(0deg)'},speak:t,pitch:1.7,rate:0.95},{d:400,s:{transform:'rotate(-12deg) scale(1.05)'}},{d:400,s:{transform:'rotate(12deg) scale(1.05)'}},{d:400,s:{transform:'rotate(-12deg) scale(1.05)'}},{d:400,s:{transform:'rotate(12deg) scale(1.05)'}},{d:300,s:{transform:'rotate(0deg) scale(1)'},sparkles:true}],bounce:[{d:100,s:{transform:'translateY(0)'},speak:t,pitch:1.7,rate:0.95},{d:150,s:{transform:'translateY(5px) scaleX(1.1) scaleY(0.85)'},sfx:()=>SFX.danceBeat()},{d:200,s:{transform:'translateY(-35px) scaleX(0.9) scaleY(1.1)'}},{d:150,s:{transform:'translateY(5px) scaleX(1.1) scaleY(0.85)'},sfx:()=>SFX.danceBeat()},{d:200,s:{transform:'translateY(-50px) scaleX(0.9) scaleY(1.1)'}},{d:150,s:{transform:'translateY(5px) scaleX(1.1) scaleY(0.85)'}},{d:200,s:{transform:'translateY(-25px) scaleX(0.9) scaleY(1.1)'}},{d:200,s:{transform:'translateY(0) scale(1)'},sparkles:true}],wiggle:[{d:100,s:{transform:'rotate(0deg)'},speak:t,pitch:1.7,rate:0.95,sfx:()=>SFX.wiggle()},{d:80,s:{transform:'rotate(-18deg) scale(1.05)'}},{d:80,s:{transform:'rotate(18deg) scale(1.05)'}},{d:80,s:{transform:'rotate(-18deg) scale(1.03)'}},{d:80,s:{transform:'rotate(18deg) scale(1.03)'}},{d:80,s:{transform:'rotate(-14deg)'}},{d:80,s:{transform:'rotate(14deg)'}},{d:200,s:{transform:'rotate(0deg) scale(1)'},sparkles:true}],sparkle:[{d:200,s:{transform:'scale(1)'},speak:t,pitch:1.7,rate:0.95,sfx:()=>SFX.spinSound()},{d:300,s:{transform:'scale(1.2)'},sparkles:true},{d:200,s:{transform:'scale(0.95)'}},{d:300,s:{transform:'scale(1.15)'},sparkles:true},{d:200,s:{transform:'scale(1)'}}]};return base[fp.anim]||base.wave;}
+function getAutoRoutine(fp) {
+  const t = fp.speak;
+  const base = {
+    wave:[{d:200,s:{transform:'rotate(0deg)'},speak:t,pitch:1.7,rate:0.95},{d:400,s:{transform:'rotate(-12deg) scale(1.05)'}},{d:400,s:{transform:'rotate(12deg) scale(1.05)'}},{d:400,s:{transform:'rotate(-12deg) scale(1.05)'}},{d:400,s:{transform:'rotate(12deg) scale(1.05)'}},{d:300,s:{transform:'rotate(0deg) scale(1)'},sparkles:true}],
+    bounce:[{d:100,s:{transform:'translateY(0)'},speak:t,pitch:1.7,rate:0.95},{d:150,s:{transform:'translateY(5px) scaleX(1.1) scaleY(0.85)'},sfx:()=>SFX.danceBeat()},{d:200,s:{transform:'translateY(-35px) scaleX(0.9) scaleY(1.1)'}},{d:150,s:{transform:'translateY(5px) scaleX(1.1) scaleY(0.85)'},sfx:()=>SFX.danceBeat()},{d:200,s:{transform:'translateY(-50px) scaleX(0.9) scaleY(1.1)'}},{d:150,s:{transform:'translateY(5px) scaleX(1.1) scaleY(0.85)'}},{d:200,s:{transform:'translateY(-25px) scaleX(0.9) scaleY(1.1)'}},{d:200,s:{transform:'translateY(0) scale(1)'},sparkles:true}],
+    wiggle:[{d:100,s:{transform:'rotate(0deg)'},speak:t,pitch:1.7,rate:0.95,sfx:()=>SFX.wiggle()},{d:80,s:{transform:'rotate(-18deg) scale(1.05)'}},{d:80,s:{transform:'rotate(18deg) scale(1.05)'}},{d:80,s:{transform:'rotate(-18deg) scale(1.03)'}},{d:80,s:{transform:'rotate(18deg) scale(1.03)'}},{d:80,s:{transform:'rotate(-14deg)'}},{d:80,s:{transform:'rotate(14deg)'}},{d:200,s:{transform:'rotate(0deg) scale(1)'},sparkles:true}],
+    sparkle:[{d:200,s:{transform:'scale(1)'},speak:t,pitch:1.7,rate:0.95,sfx:()=>SFX.spinSound()},{d:300,s:{transform:'scale(1.2)'},sparkles:true},{d:200,s:{transform:'scale(0.95)'}},{d:300,s:{transform:'scale(1.15)'},sparkles:true},{d:200,s:{transform:'scale(1)'}}],
+  };
+  return base[fp.anim] || base.wave;
+}
 
 // ═══════════════════════════════════════════════════
 // LEARNING MODES
 // ═══════════════════════════════════════════════════
-const COLORS_DATA=[{name:'Red',hex:'#FF4444',emoji:'🔴'},{name:'Blue',hex:'#4488FF',emoji:'🔵'},{name:'Green',hex:'#44CC44',emoji:'🟢'},{name:'Yellow',hex:'#FFD700',emoji:'🟡'},{name:'Purple',hex:'#AA44FF',emoji:'🟣'},{name:'Orange',hex:'#FF8800',emoji:'🟠'},{name:'Pink',hex:'#FF69B4',emoji:'🩷'}];
-const ANIMALS_DATA=[{name:'Cow',emoji:'🐮',speak:'The cow says, Moooo!'},{name:'Dog',emoji:'🐶',speak:'The dog says, Woof woof!'},{name:'Cat',emoji:'🐱',speak:'The cat says, Meow!'},{name:'Duck',emoji:'🦆',speak:'The duck says, Quack quack!'},{name:'Pig',emoji:'🐷',speak:'The pig says, Oink oink!'},{name:'Sheep',emoji:'🐑',speak:'The sheep says, Baaa!'},{name:'Rooster',emoji:'🐓',speak:'The rooster says, Cock a doodle doo!'},{name:'Horse',emoji:'🐴',speak:'The horse says, Neigh!'},{name:'Lion',emoji:'🦁',speak:'The lion says, Roarrr!'},{name:'Frog',emoji:'🐸',speak:'The frog says, Ribbit ribbit!'}];
-const COUNTING_EMOJIS=['⭐','🌸','🎈','🍎','❤️','🦋','🐟','🌈'];
+const COLORS_DATA = [{name:'Red',hex:'#FF4444',emoji:'🔴'},{name:'Blue',hex:'#4488FF',emoji:'🔵'},{name:'Green',hex:'#44CC44',emoji:'🟢'},{name:'Yellow',hex:'#FFD700',emoji:'🟡'},{name:'Purple',hex:'#AA44FF',emoji:'🟣'},{name:'Orange',hex:'#FF8800',emoji:'🟠'},{name:'Pink',hex:'#FF69B4',emoji:'🩷'}];
+const ANIMALS_DATA = [{name:'Cow',emoji:'🐮',speak:'The cow says, Moooo!'},{name:'Dog',emoji:'🐶',speak:'The dog says, Woof woof!'},{name:'Cat',emoji:'🐱',speak:'The cat says, Meow!'},{name:'Duck',emoji:'🦆',speak:'The duck says, Quack quack!'},{name:'Pig',emoji:'🐷',speak:'The pig says, Oink oink!'},{name:'Sheep',emoji:'🐑',speak:'The sheep says, Baaa!'},{name:'Rooster',emoji:'🐓',speak:'The rooster says, Cock a doodle doo!'},{name:'Horse',emoji:'🐴',speak:'The horse says, Neigh!'},{name:'Lion',emoji:'🦁',speak:'The lion says, Roarrr!'},{name:'Frog',emoji:'🐸',speak:'The frog says, Ribbit ribbit!'}];
+const COUNTING_EMOJIS = ['⭐','🌸','🎈','🍎','❤️','🦋','🐟','🌈'];
+let learnMode = null, learnTargets = [], countingCount = 0;
 
-let learnMode=null,learnTargets=[],countingCount=0;
+function startColorMode() {
+  clearLearnTargets(); learnMode = 'colors';
+  const shuffled = [...COLORS_DATA].sort(() => Math.random() - 0.5).slice(0, 3);
+  const target = pick(shuffled);
+  showLearnPrompt(target.emoji, target.hex);
+  sayText(`Tap the ${target.name} one!`, 1.7, 1.0);
+  shuffled.forEach((color, i) => {
+    const el = document.createElement('div'); el.className = 'learn-target';
+    const size = Math.min(stage.offsetWidth * 0.22, 120);
+    el.style.width = size+'px'; el.style.height = size+'px'; el.style.background = color.hex;
+    el.style.left = (15 + i * 30) + '%'; el.style.top = '35%'; el.style.fontSize = (size*0.5)+'px';
+    el.textContent = color.emoji;
+    el.addEventListener('pointerdown', e => {
+      e.stopPropagation();
+      if (color.hex === target.hex) {
+        SFX.correct(); sayText(`Yes! That's ${color.name}! Great job Kaia!`, 1.8, 1.1);
+        el.style.transform = 'scale(1.4)'; el.style.boxShadow = `0 0 40px ${color.hex}`;
+        colorFlash.style.background = color.hex; colorFlash.classList.add('show');
+        setTimeout(() => colorFlash.classList.remove('show'), 800);
+        setTimeout(() => startColorMode(), 2500);
+      } else {
+        SFX.wrong(); el.style.opacity = '0.3';
+        sayText(`That's ${color.name}. Try again! Find ${target.name}!`, 1.6, 1.0);
+      }
+    });
+    stage.appendChild(el); learnTargets.push(el);
+  });
+}
 
-function startColorMode(){clearLearnTargets();learnMode='colors';const shuffled=[...COLORS_DATA].sort(()=>Math.random()-0.5).slice(0,3);const target=pick(shuffled);showLearnPrompt(target.emoji,target.hex);Voice.say(`Tap the ${target.name} one!`,1.7,1.0);shuffled.forEach((color,i)=>{const el=document.createElement('div');el.className='learn-target';const size=Math.min(stage.offsetWidth*0.22,120);el.style.width=size+'px';el.style.height=size+'px';el.style.background=color.hex;el.style.left=(15+i*30)+'%';el.style.top='35%';el.style.fontSize=(size*0.5)+'px';el.textContent=color.emoji;el.addEventListener('pointerdown',async e=>{e.stopPropagation();if(color.hex===target.hex){SFX.correct();Voice.say(`Yes! That's ${color.name}! Great job Kaia!`,1.8,1.1);el.style.transform='scale(1.4)';el.style.boxShadow=`0 0 40px ${color.hex}`;colorFlash.style.background=color.hex;colorFlash.classList.add('show');setTimeout(()=>colorFlash.classList.remove('show'),800);setTimeout(()=>startColorMode(),2500);}else{SFX.wrong();el.style.opacity='0.3';Voice.say(`That's ${color.name}. Try again! Find ${target.name}!`,1.6,1.0);}});stage.appendChild(el);learnTargets.push(el);});}
+function startAnimalMode() {
+  clearLearnTargets(); learnMode = 'animals';
+  const animal = pick(ANIMALS_DATA);
+  const el = document.createElement('div'); el.className = 'learn-target';
+  const size = Math.min(stage.offsetWidth * 0.35, 180);
+  el.style.width = size+'px'; el.style.height = size+'px'; el.style.left = '50%'; el.style.top = '35%';
+  el.style.transform = 'translateX(-50%)'; el.style.fontSize = (size*0.6)+'px';
+  el.style.background = 'rgba(255,255,255,0.2)'; el.style.backdropFilter = 'blur(8px)'; el.style.webkitBackdropFilter = 'blur(8px)';
+  el.textContent = animal.emoji;
+  sayText(animal.speak, 1.7, 0.9);
+  el.addEventListener('pointerdown', e => {
+    e.stopPropagation(); SFX.charVoice(pick(CHAR_IDS));
+    sayText(animal.speak, 1.8, 1.0);
+    el.style.transform = 'translateX(-50%) scale(1.3) rotate(10deg)';
+    setTimeout(() => { el.style.transform = 'translateX(-50%) scale(1)'; }, 300);
+    setTimeout(() => startAnimalMode(), 3000);
+  });
+  stage.appendChild(el); learnTargets.push(el);
+}
 
-function startAnimalMode(){clearLearnTargets();learnMode='animals';const animal=pick(ANIMALS_DATA);const el=document.createElement('div');el.className='learn-target';const size=Math.min(stage.offsetWidth*0.35,180);el.style.width=size+'px';el.style.height=size+'px';el.style.left='50%';el.style.top='35%';el.style.transform='translateX(-50%)';el.style.fontSize=(size*0.6)+'px';el.style.background='rgba(255,255,255,0.2)';el.style.backdropFilter='blur(8px)';el.style.webkitBackdropFilter='blur(8px)';el.textContent=animal.emoji;Voice.say(animal.speak,1.7,0.9);el.addEventListener('pointerdown',async e=>{e.stopPropagation();SFX.charVoice(pick(CHAR_IDS));Voice.say(animal.speak,1.8,1.0);el.style.transform='translateX(-50%) scale(1.3) rotate(10deg)';setTimeout(()=>{el.style.transform='translateX(-50%) scale(1)';},300);setTimeout(()=>startAnimalMode(),3000);});stage.appendChild(el);learnTargets.push(el);}
+function startCountingMode() {
+  clearLearnTargets(); learnMode = 'counting'; countingCount = 0;
+  sayText("Let's count! Tap the screen!", 1.7, 1.0);
+  showLearnPrompt('🔢', null);
+}
 
-function startCountingMode(){clearLearnTargets();learnMode='counting';countingCount=0;Voice.say("Let's count! Tap the screen!",1.7,1.0);showLearnPrompt('🔢',null);}
-
-function clearLearnTargets(){learnTargets.forEach(el=>el.remove());learnTargets=[];hideLearnPrompt();learnMode=null;}
+function clearLearnTargets() { learnTargets.forEach(el => el.remove()); learnTargets = []; hideLearnPrompt(); learnMode = null; }
 
 // ═══════════════════════════════════════════════════
 // APP STATE
 // ═══════════════════════════════════════════════════
-const CHAR_IDS=['luna','benny','sunny','pippa','rosie'];
-const CHAR_SIZES={luna:115,benny:115,sunny:95,pippa:110,rosie:110};
-let currentScene=0,stars=0,busy={},charPos={luna:{x:10,y:6},benny:{x:28,y:10},sunny:{x:48,y:15},pippa:{x:68,y:8},rosie:{x:86,y:11}},charTimers={};
+const CHAR_IDS = ['luna','benny','sunny','pippa','rosie'];
+const CHAR_SIZES = {luna:115, benny:115, sunny:95, pippa:110, rosie:110};
+let currentScene = 0, stars = 0, busy = {};
+let charPos = {luna:{x:10,y:6}, benny:{x:28,y:10}, sunny:{x:48,y:15}, pippa:{x:68,y:8}, rosie:{x:86,y:11}};
+let charTimers = {};
 
 // ═══════════════════════════════════════════════════
-// DOM SETUP
+// DOM
 // ═══════════════════════════════════════════════════
-const stage=document.getElementById('stage'),bar=document.getElementById('bar');
+const stage = document.getElementById('stage');
+const bar = document.getElementById('bar');
 
-const bub=document.createElement('div');bub.id='speech-bubble';bub.innerHTML='<div class="emoji">🗣️</div><div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';stage.appendChild(bub);
-function showSpeechBubble(show){if(show){bub.classList.add('show');bub.style.animation='none';bub.offsetHeight;bub.style.animation='';}else bub.classList.remove('show');}
+const bub = document.createElement('div'); bub.id = 'speech-bubble';
+bub.innerHTML = '<div class="emoji">🗣️</div><div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
+stage.appendChild(bub);
+function showSpeechBubble(show) {
+  if (show) { bub.classList.add('show'); bub.style.animation = 'none'; bub.offsetHeight; bub.style.animation = ''; }
+  else bub.classList.remove('show');
+}
 
-const colorFlash=document.createElement('div');colorFlash.className='color-flash';stage.appendChild(colorFlash);
+const colorFlash = document.createElement('div'); colorFlash.className = 'color-flash'; stage.appendChild(colorFlash);
 
-const learnPrompt=document.createElement('div');learnPrompt.className='learn-prompt';learnPrompt.innerHTML='<span class="prompt-emoji"></span><span class="prompt-color"></span>';stage.appendChild(learnPrompt);
-function showLearnPrompt(emoji,hex){learnPrompt.querySelector('.prompt-emoji').textContent=emoji;const cs=learnPrompt.querySelector('.prompt-color');if(hex){cs.style.background=hex;cs.style.display='block';}else cs.style.display='none';learnPrompt.classList.add('show');}
-function hideLearnPrompt(){learnPrompt.classList.remove('show');}
+const learnPrompt = document.createElement('div'); learnPrompt.className = 'learn-prompt';
+learnPrompt.innerHTML = '<span class="prompt-emoji"></span><span class="prompt-color"></span>';
+stage.appendChild(learnPrompt);
+function showLearnPrompt(emoji, hex) { learnPrompt.querySelector('.prompt-emoji').textContent = emoji; const cs = learnPrompt.querySelector('.prompt-color'); if (hex) { cs.style.background = hex; cs.style.display = 'block'; } else cs.style.display = 'none'; learnPrompt.classList.add('show'); }
+function hideLearnPrompt() { learnPrompt.classList.remove('show'); }
 
-const starsEl=document.createElement('div');starsEl.id='stars-container';stage.appendChild(starsEl);
+const starsEl = document.createElement('div'); starsEl.id = 'stars-container'; stage.appendChild(starsEl);
+const djBooth = document.createElement('div'); djBooth.className = 'dj-booth'; djBooth.innerHTML = COOL_BUNNY_SVG; stage.appendChild(djBooth);
+const floatersEl = document.createElement('div'); floatersEl.style.cssText = 'position:absolute;inset:0;pointer-events:none;'; stage.appendChild(floatersEl);
 
-const djBooth=document.createElement('div');djBooth.className='dj-booth';djBooth.innerHTML=COOL_BUNNY_SVG;stage.appendChild(djBooth);
-
-const floatersEl=document.createElement('div');floatersEl.style.cssText='position:absolute;inset:0;pointer-events:none;';stage.appendChild(floatersEl);
-
-const charEls={};
-CHAR_IDS.forEach(id=>{const el=document.createElement('div');el.className='char-slot idle';el.innerHTML=CHAR_SVGS[id](CHAR_SIZES[id]);el.style.left=charPos[id].x+'%';el.style.bottom=charPos[id].y+'%';el.style.transform='translate(-50%,0)';el.addEventListener('pointerdown',e=>{e.stopPropagation();if(!busy[id])triggerCharRoutine(id);});stage.appendChild(el);charEls[id]=el;});
+const charEls = {};
+CHAR_IDS.forEach(id => {
+  const el = document.createElement('div'); el.className = 'char-slot idle';
+  el.innerHTML = CHAR_SVGS[id](CHAR_SIZES[id]);
+  el.style.left = charPos[id].x + '%'; el.style.bottom = charPos[id].y + '%'; el.style.transform = 'translate(-50%,0)';
+  el.addEventListener('pointerdown', e => { e.stopPropagation(); if (audioReady && !busy[id]) triggerCharRoutine(id); });
+  stage.appendChild(el); charEls[id] = el;
+});
 
 // ═══════════════════════════════════════════════════
 // ROUTINE PLAYER
 // ═══════════════════════════════════════════════════
-function playRoutine(charId,steps){if(charTimers[charId])charTimers[charId].forEach(clearTimeout);charTimers[charId]=[];const el=charEls[charId];el.classList.remove('idle');el.classList.add('active');let elapsed=0;steps.forEach(step=>{const tid=setTimeout(()=>{Object.assign(el.style,step.s);if(step.sfx)step.sfx();if(step.speak)Voice.say(step.speak,step.pitch||1.7,step.rate||1.05);let ov=el.querySelector('.peek-overlay');if(step.overlay){if(!ov){ov=document.createElement('div');ov.className='peek-overlay';ov.style.cssText='position:absolute;top:30%;left:50%;transform:translate(-50%,-50%);font-size:70px;z-index:40;animation:overlayBounce 0.8s ease-in-out infinite alternate;';el.appendChild(ov);}ov.textContent=step.overlay;}else if(ov)ov.remove();if(step.sparkles){const ring=document.createElement('div');ring.className='sparkle-ring';ring.style.cssText='position:absolute;inset:0;pointer-events:none;z-index:35;';const emojis=['✨','⭐','🌟','💫'];for(let i=0;i<12;i++){const sp=document.createElement('div');sp.className='sparkle-item';const a=(i/12)*Math.PI*2,d=65+Math.random()*20;sp.style.cssText=`position:absolute;left:calc(50% + ${Math.cos(a)*d}px);top:calc(45% + ${Math.sin(a)*d}px);font-size:${16+Math.random()*10}px;animation:sparkleFloat 1s ease-out ${i*0.04}s both;transform:translate(-50%,-50%);`;sp.textContent=emojis[i%4];ring.appendChild(sp);}el.appendChild(ring);setTimeout(()=>ring.remove(),1200);}},elapsed);charTimers[charId].push(tid);elapsed+=step.d;});const endTid=setTimeout(()=>{el.style.transform='translate(-50%,0)';el.style.opacity='1';el.classList.remove('active');el.classList.add('idle');const ov=el.querySelector('.peek-overlay');if(ov)ov.remove();busy[charId]=false;},elapsed);charTimers[charId].push(endTid);return elapsed;}
+function playRoutine(charId, steps) {
+  if (charTimers[charId]) charTimers[charId].forEach(clearTimeout);
+  charTimers[charId] = [];
+  const el = charEls[charId]; el.classList.remove('idle'); el.classList.add('active');
+  let elapsed = 0;
+  steps.forEach(step => {
+    const tid = setTimeout(() => {
+      Object.assign(el.style, step.s);
+      if (step.sfx) step.sfx();
+      if (step.speak) sayText(step.speak, step.pitch || 1.7, step.rate || 1.05);
+      // Overlay
+      let ov = el.querySelector('.peek-overlay');
+      if (step.overlay) {
+        if (!ov) { ov = document.createElement('div'); ov.className = 'peek-overlay'; ov.style.cssText = 'position:absolute;top:30%;left:50%;transform:translate(-50%,-50%);font-size:70px;z-index:40;animation:overlayBounce 0.8s ease-in-out infinite alternate;'; el.appendChild(ov); }
+        ov.textContent = step.overlay;
+      } else if (ov) ov.remove();
+      // Sparkles
+      if (step.sparkles) {
+        const ring = document.createElement('div'); ring.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:35;';
+        const emojis = ['✨','⭐','🌟','💫'];
+        for (let i = 0; i < 12; i++) {
+          const sp = document.createElement('div'); const a = (i/12)*Math.PI*2, d = 65 + Math.random()*20;
+          sp.style.cssText = `position:absolute;left:calc(50% + ${Math.cos(a)*d}px);top:calc(45% + ${Math.sin(a)*d}px);font-size:${16+Math.random()*10}px;animation:sparkleFloat 1s ease-out ${i*0.04}s both;transform:translate(-50%,-50%);`;
+          sp.textContent = emojis[i%4]; ring.appendChild(sp);
+        }
+        el.appendChild(ring); setTimeout(() => ring.remove(), 1200);
+      }
+    }, elapsed);
+    charTimers[charId].push(tid);
+    elapsed += step.d;
+  });
+  const endTid = setTimeout(() => {
+    el.style.transform = 'translate(-50%,0)'; el.style.opacity = '1';
+    el.classList.remove('active'); el.classList.add('idle');
+    const ov = el.querySelector('.peek-overlay'); if (ov) ov.remove();
+    busy[charId] = false;
+  }, elapsed);
+  charTimers[charId].push(endTid);
+  return elapsed;
+}
 
-function triggerCharRoutine(charId){const action=pick(ACTIONS);busy[charId]=true;SFX.charVoice(charId);playRoutine(charId,action.get());}
+function triggerCharRoutine(charId) {
+  const action = pick(ACTIONS); busy[charId] = true; SFX.charVoice(charId); playRoutine(charId, action.get());
+}
 
 // ═══════════════════════════════════════════════════
 // TAP BURST
 // ═══════════════════════════════════════════════════
-const BURST_EMOJIS=['⭐','✨','💖','🌟','🎉','💫','🌈','🦋','🎀','💕','🌸','🎊'];
-function createBurst(x,y){const c=document.createElement('div');c.style.cssText=`position:absolute;left:${x}px;top:${y}px;pointer-events:none;z-index:200;`;const f=document.createElement('div');f.style.cssText='position:absolute;left:-40px;top:-40px;width:80px;height:80px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,100,0.9) 0%,rgba(255,100,200,0.5) 40%,transparent 70%);animation:flashOut 0.6s ease-out forwards;';c.appendChild(f);for(let i=0;i<10;i++){const em=document.createElement('div');const a=(i/10)*Math.PI*2+(Math.random()-0.5)*0.3,d=50+Math.random()*80;em.style.cssText=`position:absolute;font-size:${22+Math.random()*20}px;left:-12px;top:-12px;animation:burstOut 0.8s ease-out ${Math.random()*0.06}s forwards;opacity:0;`;em.style.setProperty('--bx',Math.cos(a)*d+'px');em.style.setProperty('--by',Math.sin(a)*d+'px');em.textContent=pick(BURST_EMOJIS);c.appendChild(em);}stage.appendChild(c);setTimeout(()=>c.remove(),900);}
+const BURST_EMOJIS = ['⭐','✨','💖','🌟','🎉','💫','🌈','🦋','🎀','💕','🌸','🎊'];
+function createBurst(x, y) {
+  const c = document.createElement('div'); c.style.cssText = `position:absolute;left:${x}px;top:${y}px;pointer-events:none;z-index:200;`;
+  const f = document.createElement('div'); f.style.cssText = 'position:absolute;left:-40px;top:-40px;width:80px;height:80px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,100,0.9) 0%,rgba(255,100,200,0.5) 40%,transparent 70%);animation:flashOut 0.6s ease-out forwards;';
+  c.appendChild(f);
+  for (let i = 0; i < 10; i++) {
+    const em = document.createElement('div');
+    const a = (i/10)*Math.PI*2 + (Math.random()-0.5)*0.3, d = 50 + Math.random()*80;
+    em.style.cssText = `position:absolute;font-size:${22+Math.random()*20}px;left:-12px;top:-12px;animation:burstOut 0.8s ease-out ${Math.random()*0.06}s forwards;opacity:0;`;
+    em.style.setProperty('--bx', Math.cos(a)*d+'px'); em.style.setProperty('--by', Math.sin(a)*d+'px');
+    em.textContent = pick(BURST_EMOJIS); c.appendChild(em);
+  }
+  stage.appendChild(c); setTimeout(() => c.remove(), 900);
+}
 
 // ═══════════════════════════════════════════════════
-// STAGE TAP
+// STAGE TAP — always works (no audioReady guard!)
 // ═══════════════════════════════════════════════════
-stage.addEventListener('pointerdown',e=>{
-  if(!audioReady)return;
-  const rect=stage.getBoundingClientRect(),cx=e.clientX-rect.left,cy=e.clientY-rect.top;
-  SFX.tap(cx/rect.width);
-  createBurst(cx,cy);
+stage.addEventListener('pointerdown', e => {
+  const rect = stage.getBoundingClientRect();
+  const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+
+  // Visual burst always works
+  createBurst(cx, cy);
+
+  // Sound only if audio ready
+  if (audioReady) SFX.tap(cx / rect.width);
+
   stars++;
-  if(learnMode==='counting'){
+
+  // Counting mode
+  if (learnMode === 'counting') {
     countingCount++;
-    const emoji=pick(COUNTING_EMOJIS);
-    const el=document.createElement('div');el.style.cssText=`position:absolute;left:${cx-30}px;top:${cy-30}px;font-size:60px;pointer-events:none;z-index:100;animation:starPop 0.5s ease-out;`;el.textContent=emoji;stage.appendChild(el);setTimeout(()=>el.remove(),1500);
-    if(countingCount<=10){const words=['','One!','Two!','Three!','Four!','Five!','Six!','Seven!','Eight!','Nine!','Ten!'];Voice.say(words[countingCount],1.8,1.1);if(countingCount===10){setTimeout(()=>{Voice.say("Yay! You counted to ten! Great job Kaia!",1.8,1.0);SFX.celebration();countingCount=0;},1500);}}else{countingCount=1;Voice.say("One!",1.8,1.1);}
+    const emoji = pick(COUNTING_EMOJIS);
+    const el = document.createElement('div');
+    el.style.cssText = `position:absolute;left:${cx-30}px;top:${cy-30}px;font-size:60px;pointer-events:none;z-index:100;animation:starPop 0.5s ease-out;`;
+    el.textContent = emoji; stage.appendChild(el); setTimeout(() => el.remove(), 1500);
+    if (countingCount <= 10) {
+      const words = ['','One!','Two!','Three!','Four!','Five!','Six!','Seven!','Eight!','Nine!','Ten!'];
+      sayText(words[countingCount], 1.8, 1.1);
+      if (countingCount === 10) { setTimeout(() => { sayText("Yay! You counted to ten! Great job Kaia!", 1.8, 1.0); SFX.celebration(); countingCount = 0; }, 1500); }
+    } else { countingCount = 1; sayText("One!", 1.8, 1.1); }
     return;
   }
-  if(stars%5===0){SFX.celebration();Voice.say(pick(["Yay Kaia!","You're amazing!","Superstar!","Wonderful!"]),1.8,1.1);addStar();}
+
+  if (stars % 5 === 0) {
+    if (audioReady) SFX.celebration();
+    sayText(pick(["Yay Kaia!","You're amazing!","Superstar!","Wonderful!"]), 1.8, 1.1);
+    addStar();
+  }
 });
 
-function addStar(){const s=document.createElement('span');s.textContent='⭐';s.style.cssText='font-size:18px;animation:starPop 0.4s ease-out;';starsEl.appendChild(s);if(starsEl.children.length>20)starsEl.firstChild.remove();}
+function addStar() { const s = document.createElement('span'); s.textContent = '⭐'; s.style.cssText = 'font-size:18px;animation:starPop 0.4s ease-out;'; starsEl.appendChild(s); if (starsEl.children.length > 20) starsEl.firstChild.remove(); }
 
 // ═══════════════════════════════════════════════════
 // SCENE, FLOATERS, AUTO-WANDER, AUTO-DIRECTOR
 // ═══════════════════════════════════════════════════
-let floaterData=[];
-function setScene(idx){currentScene=idx;stage.style.background=SCENES[idx].bg;updateFloaters();document.querySelectorAll('.scene-btn').forEach((b,i)=>b.classList.toggle('on',i===idx));}
-function updateFloaters(){floatersEl.innerHTML='';floaterData=SCENES[currentScene].floats.map(emoji=>{const el=document.createElement('div');el.className='floater';el.textContent=emoji;const d={el,x:Math.random()*85+5,y:Math.random()*30+5,phase:Math.random()*Math.PI*2,speed:0.2+Math.random()*0.4,size:26+Math.random()*18};el.style.fontSize=d.size+'px';el.style.left=d.x+'%';el.style.top=d.y+'%';floatersEl.appendChild(el);return d;});}
-setInterval(()=>{floaterData.forEach(f=>{f.phase+=0.02*f.speed;f.x+=Math.sin(f.phase)*0.1;f.el.style.left=f.x+'%';f.el.style.top=(f.y+Math.sin(f.phase)*2)+'%';});},50);
+let floaterData = [];
+function setScene(idx) { currentScene = idx; stage.style.background = SCENES[idx].bg; updateFloaters(); document.querySelectorAll('.scene-btn').forEach((b,i) => b.classList.toggle('on', i === idx)); }
+function updateFloaters() {
+  floatersEl.innerHTML = '';
+  floaterData = SCENES[currentScene].floats.map(emoji => {
+    const el = document.createElement('div'); el.className = 'floater'; el.textContent = emoji;
+    const d = {el, x:Math.random()*85+5, y:Math.random()*30+5, phase:Math.random()*Math.PI*2, speed:0.2+Math.random()*0.4, size:26+Math.random()*18};
+    el.style.fontSize = d.size+'px'; el.style.left = d.x+'%'; el.style.top = d.y+'%'; floatersEl.appendChild(el); return d;
+  });
+}
+setInterval(() => { floaterData.forEach(f => { f.phase += 0.02*f.speed; f.x += Math.sin(f.phase)*0.1; f.el.style.left = f.x+'%'; f.el.style.top = (f.y + Math.sin(f.phase)*2)+'%'; }); }, 50);
 
-const CB={luna:{xMin:3,xMax:18,yMin:3,yMax:18},benny:{xMin:20,xMax:38,yMin:3,yMax:18},sunny:{xMin:40,xMax:58,yMin:6,yMax:22},pippa:{xMin:60,xMax:78,yMin:3,yMax:18},rosie:{xMin:78,xMax:95,yMin:3,yMax:18}};
-setInterval(()=>{CHAR_IDS.forEach(id=>{if(busy[id])return;const b=CB[id],p=charPos[id];p.x=Math.max(b.xMin,Math.min(b.xMax,p.x+(Math.random()-0.5)*5));p.y=Math.max(b.yMin,Math.min(b.yMax,p.y+(Math.random()-0.5)*5));charEls[id].style.left=p.x+'%';charEls[id].style.bottom=p.y+'%';});},3000);
+const CB = {luna:{xMin:3,xMax:18,yMin:3,yMax:18},benny:{xMin:20,xMax:38,yMin:3,yMax:18},sunny:{xMin:40,xMax:58,yMin:6,yMax:22},pippa:{xMin:60,xMax:78,yMin:3,yMax:18},rosie:{xMin:78,xMax:95,yMin:3,yMax:18}};
+setInterval(() => { CHAR_IDS.forEach(id => { if (busy[id]) return; const b = CB[id], p = charPos[id]; p.x = Math.max(b.xMin, Math.min(b.xMax, p.x + (Math.random()-0.5)*5)); p.y = Math.max(b.yMin, Math.min(b.yMax, p.y + (Math.random()-0.5)*5)); charEls[id].style.left = p.x+'%'; charEls[id].style.bottom = p.y+'%'; }); }, 3000);
 
-setInterval(()=>{if(learnMode)return;const avail=CHAR_IDS.filter(c=>!busy[c]);if(!avail.length||!audioReady)return;const charId=pick(avail);busy[charId]=true;playRoutine(charId,getAutoRoutine(pick(AUTO_PHRASES)));},10000);
+// Auto-director: only runs when audio is ready
+setInterval(() => { if (learnMode || !audioReady) return; const avail = CHAR_IDS.filter(c => !busy[c]); if (!avail.length) return; const charId = pick(avail); busy[charId] = true; playRoutine(charId, getAutoRoutine(pick(AUTO_PHRASES))); }, 10000);
 
-setInterval(()=>{if(!learnMode)setScene((currentScene+1)%SCENES.length);},30000);
+setInterval(() => { if (!learnMode) setScene((currentScene+1) % SCENES.length); }, 30000);
 
 // ═══════════════════════════════════════════════════
 // BUILD BOTTOM BAR
 // ═══════════════════════════════════════════════════
-SCENES.forEach((sc,i)=>{const btn=document.createElement('button');btn.className='scene-btn'+(i===0?' on':'');btn.textContent=sc.emoji;btn.addEventListener('pointerdown',e=>{e.stopPropagation();SFX.tap(0.5);clearLearnTargets();setScene(i);});bar.appendChild(btn);});
-bar.appendChild(Object.assign(document.createElement('div'),{className:'divider'}));
-ACTIONS.forEach((act,i)=>{const btn=document.createElement('button');btn.className='action-btn';btn.textContent=act.emoji;btn.addEventListener('pointerdown',e=>{e.stopPropagation();clearLearnTargets();btn.classList.add('on');setTimeout(()=>btn.classList.remove('on'),500);CHAR_IDS.forEach((charId,j)=>{setTimeout(()=>{busy[charId]=true;playRoutine(charId,act.get());},j*200);});});bar.appendChild(btn);});
-bar.appendChild(Object.assign(document.createElement('div'),{className:'divider'}));
-[{emoji:'🎨',action:startColorMode},{emoji:'🐮',action:startAnimalMode},{emoji:'🔢',action:startCountingMode}].forEach(lb=>{const btn=document.createElement('button');btn.className='learn-btn';btn.textContent=lb.emoji;btn.addEventListener('pointerdown',e=>{e.stopPropagation();document.querySelectorAll('.learn-btn').forEach(b=>b.classList.remove('on'));btn.classList.add('on');lb.action();});bar.appendChild(btn);});
-bar.appendChild(Object.assign(document.createElement('div'),{className:'divider'}));
+SCENES.forEach((sc, i) => {
+  const btn = document.createElement('button'); btn.className = 'scene-btn' + (i === 0 ? ' on' : ''); btn.textContent = sc.emoji;
+  btn.addEventListener('pointerdown', e => { e.stopPropagation(); if (audioReady) SFX.tap(0.5); clearLearnTargets(); setScene(i); });
+  bar.appendChild(btn);
+});
+bar.appendChild(Object.assign(document.createElement('div'), {className:'divider'}));
 
-const musicNorm=document.createElement('button');musicNorm.className='music-btn';musicNorm.textContent='🎵';
-const musicReg=document.createElement('button');musicReg.className='music-btn';musicReg.textContent='🐰';
-musicNorm.addEventListener('pointerdown',e=>{e.stopPropagation();const t=Tone.getTransport();if(t.state==='started'){t.stop();t.cancel();musicNorm.classList.remove('on');musicReg.classList.remove('on');djBooth.classList.remove('show');return;}const on=toggleMusic('normal');musicNorm.classList.toggle('on',on);musicReg.classList.remove('on');djBooth.classList.remove('show');if(on)Voice.say("Music time!",1.8,1.1);});
-musicReg.addEventListener('pointerdown',e=>{e.stopPropagation();const t=Tone.getTransport();if(t.state==='started'){t.stop();t.cancel();musicReg.classList.remove('on');musicNorm.classList.remove('on');djBooth.classList.remove('show');return;}const on=toggleMusic('reggaeton');musicReg.classList.toggle('on',on);musicNorm.classList.remove('on');djBooth.classList.toggle('show',on);if(on)Voice.say("DJ Bunny in the house! Let's go!",1.7,1.1);});
-bar.appendChild(musicNorm);bar.appendChild(musicReg);
+ACTIONS.forEach((act) => {
+  const btn = document.createElement('button'); btn.className = 'action-btn'; btn.textContent = act.emoji;
+  btn.addEventListener('pointerdown', e => {
+    e.stopPropagation(); if (!audioReady) return;
+    clearLearnTargets(); btn.classList.add('on'); setTimeout(() => btn.classList.remove('on'), 500);
+    CHAR_IDS.forEach((charId, j) => { setTimeout(() => { busy[charId] = true; playRoutine(charId, act.get()); }, j * 200); });
+  });
+  bar.appendChild(btn);
+});
+bar.appendChild(Object.assign(document.createElement('div'), {className:'divider'}));
 
+[{emoji:'🎨',action:startColorMode},{emoji:'🐮',action:startAnimalMode},{emoji:'🔢',action:startCountingMode}].forEach(lb => {
+  const btn = document.createElement('button'); btn.className = 'learn-btn'; btn.textContent = lb.emoji;
+  btn.addEventListener('pointerdown', e => { e.stopPropagation(); if (!audioReady) return; document.querySelectorAll('.learn-btn').forEach(b => b.classList.remove('on')); btn.classList.add('on'); lb.action(); });
+  bar.appendChild(btn);
+});
+bar.appendChild(Object.assign(document.createElement('div'), {className:'divider'}));
+
+const musicNorm = document.createElement('button'); musicNorm.className = 'music-btn'; musicNorm.textContent = '🎵';
+const musicReg = document.createElement('button'); musicReg.className = 'music-btn'; musicReg.textContent = '🐰';
+
+musicNorm.addEventListener('pointerdown', e => {
+  e.stopPropagation(); if (!audioReady) return;
+  const t = Tone.getTransport();
+  if (t.state === 'started') { t.stop(); t.cancel(); musicNorm.classList.remove('on'); musicReg.classList.remove('on'); djBooth.classList.remove('show'); return; }
+  const on = toggleMusic('normal'); musicNorm.classList.toggle('on', on); musicReg.classList.remove('on'); djBooth.classList.remove('show');
+  if (on) sayText("Music time!", 1.8, 1.1);
+});
+musicReg.addEventListener('pointerdown', e => {
+  e.stopPropagation(); if (!audioReady) return;
+  const t = Tone.getTransport();
+  if (t.state === 'started') { t.stop(); t.cancel(); musicReg.classList.remove('on'); musicNorm.classList.remove('on'); djBooth.classList.remove('show'); return; }
+  const on = toggleMusic('reggaeton'); musicReg.classList.toggle('on', on); musicNorm.classList.remove('on'); djBooth.classList.toggle('show', on);
+  if (on) sayText("DJ Bunny in the house! Let's go!", 1.7, 1.1);
+});
+bar.appendChild(musicNorm); bar.appendChild(musicReg);
+
+// ═══════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════
 setScene(0);
 </script>
 </body>
