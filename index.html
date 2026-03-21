@@ -74,9 +74,35 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,syste
 var A=false,V=false,sv=null;
 var xylo,bell,bounce,pluck,spk,whoosh,kick,hat,bass,pad;
 
-function lv(){try{var v=speechSynthesis.getVoices();if(!v.length)return;sv=v.find(function(x){return x.name==='Samantha'})||v.find(function(x){return x.name.indexOf('Google US English')>=0})||v.find(function(x){return x.lang==='en-US'&&x.localService})||v.find(function(x){return x.lang.indexOf('en')===0})||v[0]}catch(e){}}
-lv();try{speechSynthesis.onvoiceschanged=lv}catch(e){}
-setTimeout(lv,100);setTimeout(lv,500);setTimeout(lv,2000);
+function lv(){
+  try{
+    var v=speechSynthesis.getVoices();
+    if(!v.length)return;
+    /* Prefer Samantha (iOS default, clear female voice) */
+    sv=v.find(function(x){return x.name==='Samantha'})
+      ||v.find(function(x){return x.name==='Karen'})
+      ||v.find(function(x){return x.name.indexOf('Google US English')>=0})
+      ||v.find(function(x){return x.lang==='en-US'&&x.localService})
+      ||v.find(function(x){return x.lang.indexOf('en')===0})
+      ||v[0];
+    V=true; /* voices loaded — speech is available */
+  }catch(e){}
+}
+lv();
+try{speechSynthesis.onvoiceschanged=lv}catch(e){}
+setTimeout(lv,100);setTimeout(lv,250);setTimeout(lv,500);setTimeout(lv,1000);setTimeout(lv,2000);setTimeout(lv,4000);
+
+/* iOS speech keepalive — iOS kills speechSynthesis after ~15s idle.
+   Periodically poke it with an empty utterance to keep it alive. */
+setInterval(function(){
+  try{
+    if(!V)lv(); /* keep trying to load voices */
+    speechSynthesis.cancel();
+    var k=new SpeechSynthesisUtterance('');
+    k.volume=0;
+    speechSynthesis.speak(k);
+  }catch(e){}
+},10000);
 
 var spl=document.getElementById('splash'),done=false;
 
@@ -87,17 +113,24 @@ function onTap(e){
 
   // ── ALL SYNCHRONOUS. No await, no .then, no callbacks ──
 
-  // 1) Voice unlock
+  // 1) Voice unlock — MUST happen in user gesture for iOS
   try{
     lv();
+    /* Mark voice as available if speechSynthesis exists at all */
+    if(window.speechSynthesis)V=true;
+    /* iOS requires cancel() before first speak in a gesture */
+    speechSynthesis.cancel();
     var u=new SpeechSynthesisUtterance('Hello Kaia!');
     u.pitch=1.7;u.rate=1.05;u.volume=1;
     if(sv)u.voice=sv;
     u.onend=function(){showBub(false)};
+    u.onerror=function(){showBub(false)};
     speechSynthesis.speak(u);
-    V=true;
     showBub(true);
-  }catch(e){}
+    /* iOS: retry voice loading after gesture unlock */
+    setTimeout(lv,200);
+    setTimeout(lv,1000);
+  }catch(e){if(window.speechSynthesis)V=true}
 
   // 2) Tone unlock — just call start(), don't wait for promise
   try{Tone.start()}catch(e){}
@@ -142,7 +175,44 @@ spl.addEventListener('touchstart',onTap,{passive:false});
 spl.addEventListener('click',onTap);
 
 /* ═══════════════════════════════════════════════════ */
-function say(t,p,r){if(!V)return;try{lv();speechSynthesis.cancel();setTimeout(function(){try{var u=new SpeechSynthesisUtterance(t);u.pitch=Math.min(Math.max(p||1.7,.1),2);u.rate=Math.min(Math.max(r||1.05,.1),2);u.volume=1;if(sv)u.voice=sv;u.onstart=function(){showBub(true)};u.onend=function(){showBub(false)};u.onerror=function(){showBub(false)};speechSynthesis.speak(u)}catch(e){}},80)}catch(e){}}
+function say(t,p,r){
+  if(!V||!window.speechSynthesis)return;
+  try{
+    lv();
+    speechSynthesis.cancel();
+    /* iOS needs a small delay after cancel() before speak() works */
+    setTimeout(function(){
+      try{
+        var u=new SpeechSynthesisUtterance(t);
+        u.pitch=Math.min(Math.max(p||1.7,.1),2);
+        u.rate=Math.min(Math.max(r||1.05,.1),2);
+        u.volume=1;
+        if(sv)u.voice=sv;
+        u.onstart=function(){showBub(true)};
+        u.onend=function(){showBub(false)};
+        u.onerror=function(){
+          showBub(false);
+          /* iOS fallback: retry once after a longer delay */
+          setTimeout(function(){
+            try{
+              speechSynthesis.cancel();
+              var u2=new SpeechSynthesisUtterance(t);
+              u2.pitch=Math.min(Math.max(p||1.7,.1),2);
+              u2.rate=Math.min(Math.max(r||1.05,.1),2);
+              u2.volume=1;
+              if(sv)u2.voice=sv;
+              u2.onstart=function(){showBub(true)};
+              u2.onend=function(){showBub(false)};
+              u2.onerror=function(){showBub(false)};
+              speechSynthesis.speak(u2);
+            }catch(e2){showBub(false)}
+          },250);
+        };
+        speechSynthesis.speak(u);
+      }catch(e){showBub(false)}
+    },120);
+  }catch(e){showBub(false)}
+}
 
 var S={
 tap:function(x){if(!A)return;try{var s=['C4','D4','E4','G4','A4','C5','D5','E5','G5','A5','C6'];xylo.triggerAttackRelease(s[Math.min(Math.floor(x*s.length),s.length-1)],'8n')}catch(e){}},
