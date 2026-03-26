@@ -1,0 +1,36 @@
+{
+  "name": "kaiaplay",
+  "version": "2.0.0",
+  "description": "Interactive learning world for toddlers",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "generate-voices": "bash scripts/generate-voices.sh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rahulguptacto/kaia-play.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/rahulguptacto/kaia-play/issues"
+  },
+  "homepage": "https://github.com/rahulguptacto/kaia-play#readme",
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tone": "^15.1.22"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.3",
+    "vite-plugin-pwa": "^1.2.0"
+  }
+}
