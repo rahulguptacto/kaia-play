@@ -6,12 +6,16 @@ function pickRandom<T>(arr: T[]): T {
 }
 
 export function peekaboo(): AnimationStep[] {
-  const hidePhrase = pickRandom(["peek-a-boo", "where-am-i", "im-hiding"]);
-  const revealPhrase = pickRandom([
-    "here-i-am",
-    "boo",
-    "surprise",
-    "i-see-you-kaia",
+  const hideKey = pickRandom([
+    "peek-hiding-1",
+    "peek-hiding-2",
+    "peek-hiding-3",
+  ]);
+  const revealKey = pickRandom([
+    "peek-reveal-1",
+    "peek-reveal-2",
+    "peek-reveal-3",
+    "peek-reveal-4",
   ]);
 
   return [
@@ -19,7 +23,7 @@ export function peekaboo(): AnimationStep[] {
       duration: 400,
       style: { transform: "scale(.7) rotate(8deg)", opacity: ".7" },
       sfx: () => synthManager.peekaboo(),
-      voice: hidePhrase,
+      voice: hideKey,
     },
     { duration: 350, style: { transform: "scale(.3)", opacity: ".3" } },
     { duration: 250, style: { transform: "scale(0)", opacity: "0" } },
@@ -37,9 +41,7 @@ export function peekaboo(): AnimationStep[] {
       duration: 300,
       style: { transform: "scale(.5)", opacity: ".5" },
       sfx: () => synthManager.praise(),
-      voice: revealPhrase,
-      voicePitch: 1.8,
-      voiceRate: 1.15,
+      voice: revealKey,
     },
     {
       duration: 250,
@@ -53,18 +55,17 @@ export function peekaboo(): AnimationStep[] {
 }
 
 export function dance(): AnimationStep[] {
-  const phrase = pickRandom([
-    "dance-dance-dance",
-    "shake-shake-shake",
-    "lets-dance-kaia",
-    "wiggle-wiggle",
+  const startKey = pickRandom([
+    "dance-start-1",
+    "dance-start-2",
+    "dance-start-3",
   ]);
 
   const steps: AnimationStep[] = [
     {
       duration: 300,
       style: { transform: "rotate(0deg)" },
-      voice: phrase,
+      voice: startKey,
       sfx: () => synthManager.danceBeat(),
     },
   ];
@@ -92,8 +93,7 @@ export function dance(): AnimationStep[] {
     duration: 300,
     style: { transform: "rotate(180deg) scale(1.1)" },
     sfx: () => synthManager.spin(),
-    voice: "wheee",
-    voicePitch: 1.9,
+    voice: "dance-whee",
   });
   steps.push({
     duration: 300,
@@ -101,94 +101,68 @@ export function dance(): AnimationStep[] {
     sparkles: true,
   });
   steps.push({
-    duration: 200,
+    duration: 400,
     style: { transform: "rotate(0deg) scale(1)" },
+    voice: "dance-end",
   });
 
   return steps;
 }
 
 export function jump(): AnimationStep[] {
-  const phrase = pickRandom([
-    "jump-jump-jump",
-    "boing-boing",
-    "up-up-up",
-    "wheee-so-high",
-  ]);
+  const startKey = pickRandom(["jump-start-1", "jump-start-2", "jump-start-3"]);
 
   return [
     {
       duration: 250,
-      style: {
-        transform: "scaleX(1.15) scaleY(.8) translateY(10px)",
-      },
-      voice: phrase,
+      style: { transform: "scaleX(1.15) scaleY(.8) translateY(10px)" },
+      voice: startKey,
     },
     {
       duration: 150,
-      style: {
-        transform: "scaleX(1.2) scaleY(.7) translateY(15px)",
-      },
+      style: { transform: "scaleX(1.2) scaleY(.7) translateY(15px)" },
     },
     {
       duration: 200,
-      style: {
-        transform: "scaleX(.85) scaleY(1.2) translateY(-80px)",
-      },
+      style: { transform: "scaleX(.85) scaleY(1.2) translateY(-80px)" },
       sfx: () => synthManager.jump(),
     },
     {
       duration: 300,
       style: { transform: "translateY(-100px)" },
-      voice: "wheee",
-      voicePitch: 1.9,
+      voice: "jump-whee",
     },
     { duration: 200, style: { transform: "translateY(-95px)" } },
     { duration: 150, style: { transform: "translateY(-30px)" } },
     {
       duration: 100,
-      style: {
-        transform: "scaleX(1.25) scaleY(.7) translateY(8px)",
-      },
+      style: { transform: "scaleX(1.25) scaleY(.7) translateY(8px)" },
       sfx: () => synthManager.jumpLand(),
       sparkles: true,
     },
     { duration: 200, style: { transform: "translateY(-25px)" } },
     { duration: 150, style: { transform: "translateY(4px)" } },
     {
-      duration: 200,
+      duration: 300,
       style: { transform: "scale(1) translateY(0)" },
+      voice: "jump-land",
     },
   ];
 }
 
 export function spin(): AnimationStep[] {
-  const phrase = pickRandom([
-    "round-and-round",
-    "spin-spin-spin",
-    "dizzy",
-    "wheee-spinning",
-  ]);
+  const startKey = pickRandom(["spin-start-1", "spin-start-2"]);
 
   return [
     {
       duration: 50,
       style: { transform: "rotate(0deg) scale(1)" },
-      voice: phrase,
+      voice: startKey,
       sfx: () => synthManager.spin(),
     },
-    {
-      duration: 200,
-      style: { transform: "rotate(90deg) scale(1.1)" },
-    },
-    {
-      duration: 200,
-      style: { transform: "rotate(180deg) scale(1.15)" },
-    },
-    {
-      duration: 200,
-      style: { transform: "rotate(270deg) scale(1.1)" },
-    },
+    { duration: 200, style: { transform: "rotate(90deg) scale(1.1)" } },
+    { duration: 200, style: { transform: "rotate(180deg) scale(1.15)" } },
+    { duration: 200, style: { transform: "rotate(270deg) scale(1.1)" } },
     {
       duration: 200,
       style: { transform: "rotate(360deg) scale(1.05)" },
@@ -197,8 +171,7 @@ export function spin(): AnimationStep[] {
     {
       duration: 150,
       style: { transform: "rotate(540deg) scale(1.15)" },
-      voice: "wheee",
-      voicePitch: 1.9,
+      voice: "spin-dizzy",
     },
     {
       duration: 150,
@@ -206,27 +179,21 @@ export function spin(): AnimationStep[] {
       sparkles: true,
     },
     {
-      duration: 200,
+      duration: 300,
       style: { transform: "rotate(720deg) scale(1)" },
+      voice: "spin-end",
     },
   ];
 }
 
 export function party(): AnimationStep[] {
-  const phrase = pickRandom([
-    "yay-party-time",
-    "hooray",
-    "we-did-it",
-    "amazing",
-  ]);
+  const startKey = pickRandom(["party-start-1", "party-start-2"]);
 
   return [
     {
       duration: 200,
-      style: {
-        transform: "scaleX(1.15) scaleY(.8) translateY(8px)",
-      },
-      voice: phrase,
+      style: { transform: "scaleX(1.15) scaleY(.8) translateY(8px)" },
+      voice: startKey,
       sfx: () => synthManager.celebrate(),
     },
     {
@@ -235,45 +202,30 @@ export function party(): AnimationStep[] {
     },
     {
       duration: 200,
-      style: {
-        transform: "translateY(-70px) rotate(180deg) scale(1.15)",
-      },
+      style: { transform: "translateY(-70px) rotate(180deg) scale(1.15)" },
       sparkles: true,
     },
     {
       duration: 200,
-      style: {
-        transform: "translateY(-60px) rotate(360deg) scale(1.1)",
-      },
+      style: { transform: "translateY(-60px) rotate(360deg) scale(1.1)" },
     },
     {
       duration: 150,
-      style: {
-        transform: "translateY(5px) scaleX(1.2) scaleY(.75)",
-      },
+      style: { transform: "translateY(5px) scaleX(1.2) scaleY(.75)" },
       sparkles: true,
     },
     {
       duration: 120,
       style: { transform: "rotate(-15deg) scale(1.05)" },
-      voice: "yay",
-      voicePitch: 1.9,
+      voice: "party-yay",
     },
+    { duration: 120, style: { transform: "rotate(15deg) scale(1.05)" } },
+    { duration: 120, style: { transform: "rotate(-10deg)" } },
+    { duration: 120, style: { transform: "rotate(10deg)" } },
     {
-      duration: 120,
-      style: { transform: "rotate(15deg) scale(1.05)" },
-    },
-    {
-      duration: 120,
-      style: { transform: "rotate(-10deg)" },
-    },
-    {
-      duration: 120,
-      style: { transform: "rotate(10deg)" },
-    },
-    {
-      duration: 200,
+      duration: 300,
       style: { transform: "rotate(0deg) scale(1)" },
+      voice: "party-confetti",
     },
   ];
 }

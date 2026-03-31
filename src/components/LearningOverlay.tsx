@@ -45,6 +45,7 @@ export default function LearningOverlay({ mode, onTapCount }: Props) {
 function ColorMode() {
   const [choices, setChoices] = useState(() => shuffle(colors).slice(0, 3));
   const [target, setTarget] = useState(() => pickRandom(choices));
+  const [firstRound, setFirstRound] = useState(true);
 
   const nextRound = useCallback(() => {
     const newChoices = shuffle(colors).slice(0, 3);
@@ -52,18 +53,24 @@ function ColorMode() {
     setChoices(newChoices);
     setTarget(newTarget);
     const key = `tap-the-${newTarget.name.toLowerCase()}`;
-    voiceManager.speak(key, `Tap the ${newTarget.name} one!`);
+    voiceManager.speak(key);
   }, []);
 
   useEffect(() => {
-    const key = `tap-the-${target.name.toLowerCase()}`;
-    voiceManager.speak(key, `Tap the ${target.name} one!`);
+    if (firstRound) {
+      // First time: play intro, then the color prompt
+      voiceManager.speak("color-intro");
+      setTimeout(() => {
+        const key = `tap-the-${target.name.toLowerCase()}`;
+        voiceManager.speak(key);
+      }, 3000);
+      setFirstRound(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
     <>
-      {/* Target indicator */}
       <TargetBadge emoji={target.emoji} color={target.hex} />
 
       {choices.map((c, i) => (
@@ -90,20 +97,17 @@ function ColorMode() {
             e.stopPropagation();
             if (c.hex === target.hex) {
               synthManager.correct();
-              const key = `yes-thats-${target.name.toLowerCase()}`;
-              voiceManager.speak(
-                key,
-                `Yes! That's ${target.name}! Great job Kaia!`,
-                1.8,
-                1.1,
-              );
-              setTimeout(nextRound, 2500);
+              const key = `yes-${target.name.toLowerCase()}`;
+              voiceManager.speak(key);
+              setTimeout(nextRound, 4000); // Longer pause — conversational clips are longer
             } else {
               synthManager.incorrect();
-              voiceManager.speak(
-                `tap-the-${target.name.toLowerCase()}`,
-                `That's ${c.name}. Find ${target.name}!`,
-              );
+              voiceManager.speak("wrong-color");
+              // After the encouragement, repeat the target
+              setTimeout(() => {
+                const key = `tap-the-${target.name.toLowerCase()}`;
+                voiceManager.speak(key);
+              }, 3000);
             }
           }}
         >
@@ -116,15 +120,22 @@ function ColorMode() {
 
 function AnimalMode() {
   const [animal, setAnimal] = useState(() => pickRandom(animals));
+  const [firstAnimal, setFirstAnimal] = useState(true);
 
   const nextAnimal = useCallback(() => {
     const next = pickRandom(animals);
     setAnimal(next);
-    voiceManager.speak(next.voiceKey, next.phrase, 1.7, 0.9);
+    voiceManager.speak(next.voiceKey);
   }, []);
 
   useEffect(() => {
-    voiceManager.speak(animal.voiceKey, animal.phrase, 1.7, 0.9);
+    if (firstAnimal) {
+      voiceManager.speak("animal-intro");
+      setTimeout(() => {
+        voiceManager.speak(animal.voiceKey);
+      }, 2500);
+      setFirstAnimal(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -152,8 +163,9 @@ function AnimalMode() {
       }}
       onPointerDown={(e) => {
         e.stopPropagation();
-        voiceManager.speak(animal.voiceKey, animal.phrase, 1.8, 1);
-        setTimeout(nextAnimal, 3000);
+        // Repeat the current animal sound, then move to next
+        voiceManager.speak(animal.voiceKey);
+        setTimeout(nextAnimal, 5000); // Longer for conversational clips
       }}
     >
       {animal.emoji}
@@ -169,38 +181,21 @@ function CountingMode({
   const [count, setCount] = useState(0);
 
   useEffect(() => {
-    voiceManager.speak("lets-count", "Let's count! Tap the screen!");
+    voiceManager.speak("count-intro");
   }, []);
 
   useEffect(() => {
     if (count > 0 && count <= 10) {
       const key = `count-${count}`;
-      const words = [
-        "",
-        "One!",
-        "Two!",
-        "Three!",
-        "Four!",
-        "Five!",
-        "Six!",
-        "Seven!",
-        "Eight!",
-        "Nine!",
-        "Ten!",
-      ];
-      voiceManager.speak(key, words[count], 1.8, 1.1);
+      voiceManager.speak(key);
       onTapCount?.(count);
 
       if (count === 10) {
+        // count-10 already has the celebration built in — wait for it
         setTimeout(() => {
-          voiceManager.speak(
-            "yay-counted-to-ten",
-            "Yay! You counted to ten!",
-            1.8,
-          );
           synthManager.celebrate();
           setCount(0);
-        }, 1500);
+        }, 4000);
       }
     }
   }, [count, onTapCount]);
@@ -239,6 +234,7 @@ function CountingMode({
 function ShapeMode() {
   const [choices, setChoices] = useState(() => shuffle(shapes).slice(0, 3));
   const [target, setTarget] = useState(() => pickRandom(choices));
+  const [firstRound, setFirstRound] = useState(true);
 
   const shapeColors = [
     "#FF6B6B",
@@ -255,12 +251,18 @@ function ShapeMode() {
     setChoices(newChoices);
     setTarget(newTarget);
     const key = `tap-the-${newTarget.name.toLowerCase()}`;
-    voiceManager.speak(key, `Tap the ${newTarget.name}!`);
+    voiceManager.speak(key);
   }, []);
 
   useEffect(() => {
-    const key = `tap-the-${target.name.toLowerCase()}`;
-    voiceManager.speak(key, `Tap the ${target.name}!`);
+    if (firstRound) {
+      voiceManager.speak("shape-intro");
+      setTimeout(() => {
+        const key = `tap-the-${target.name.toLowerCase()}`;
+        voiceManager.speak(key);
+      }, 2500);
+      setFirstRound(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -286,20 +288,16 @@ function ShapeMode() {
             e.stopPropagation();
             if (s.name === target.name) {
               synthManager.correct();
-              const key = `yes-thats-a-${target.name.toLowerCase()}`;
-              voiceManager.speak(
-                key,
-                `Yes! That's a ${target.name}! Great job!`,
-                1.8,
-                1.1,
-              );
-              setTimeout(nextRound, 2500);
+              const key = `yes-${target.name.toLowerCase()}`;
+              voiceManager.speak(key);
+              setTimeout(nextRound, 3500);
             } else {
               synthManager.incorrect();
-              voiceManager.speak(
-                `tap-the-${target.name.toLowerCase()}`,
-                `That's a ${s.name}. Find the ${target.name}!`,
-              );
+              voiceManager.speak("praise-try-again");
+              setTimeout(() => {
+                const key = `tap-the-${target.name.toLowerCase()}`;
+                voiceManager.speak(key);
+              }, 3000);
             }
           }}
         >
@@ -319,15 +317,22 @@ function ShapeMode() {
 
 function BodyPartsMode() {
   const [part, setPart] = useState(() => pickRandom(bodyParts));
+  const [firstPart, setFirstPart] = useState(true);
 
   const nextPart = useCallback(() => {
     const next = pickRandom(bodyParts);
     setPart(next);
-    voiceManager.speak(next.voiceKey, next.phrase);
+    voiceManager.speak(next.voiceKey);
   }, []);
 
   useEffect(() => {
-    voiceManager.speak(part.voiceKey, part.phrase);
+    if (firstPart) {
+      voiceManager.speak("body-intro");
+      setTimeout(() => {
+        voiceManager.speak(part.voiceKey);
+      }, 2500);
+      setFirstPart(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -348,13 +353,8 @@ function BodyPartsMode() {
       onPointerDown={(e) => {
         e.stopPropagation();
         synthManager.correct();
-        voiceManager.speak(
-          part.voiceKey,
-          `Yes! That's your ${part.name}!`,
-          1.8,
-          1.1,
-        );
-        setTimeout(nextPart, 2500);
+        voiceManager.speak("praise-good-job");
+        setTimeout(nextPart, 3500);
       }}
     >
       <div

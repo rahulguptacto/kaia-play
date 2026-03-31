@@ -61,8 +61,8 @@ export default function App() {
       dispatch({ type: "SET_SPEAKING", value: speaking });
     });
 
-    // Say hello
-    voiceManager.speak("hello-kaia", "Hello Kaia!");
+    // Say hello with the full conversational greeting
+    voiceManager.speak("hello-kaia");
 
     setStarted(true);
   }, [dispatch]);
@@ -174,13 +174,9 @@ export default function App() {
       const newMode = musicManager.toggle(mode);
       dispatch({ type: "SET_MUSIC", mode: newMode as MusicMode });
       if (newMode === "normal") {
-        voiceManager.speak("music-time", "Music time!", 1.8);
+        voiceManager.speak("music-start");
       } else if (newMode === "reggaeton") {
-        voiceManager.speak(
-          "dj-bunny-in-the-house",
-          "DJ Bunny in the house!",
-          1.7,
-        );
+        voiceManager.speak("dj-bunny");
       }
     },
     [dispatch],

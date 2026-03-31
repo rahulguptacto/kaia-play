@@ -10,6 +10,7 @@ import DJBunny from "./DJBunny";
 import LearningOverlay from "./LearningOverlay";
 import { characters } from "../characters";
 import { synthManager } from "../audio/SynthManager";
+import { voiceManager } from "../audio/VoiceManager";
 
 interface Props {
   state: AppState;
@@ -35,9 +36,19 @@ export default function Stage({
     synthManager.tap(cx / rect.width);
     dispatch({ type: "TAP" });
 
-    // Every 5 taps: celebration
+    // Every 5 taps: celebration with praise
     if ((state.tapCount + 1) % 5 === 0) {
       synthManager.celebrate();
+      const praiseKeys = [
+        "praise-amazing",
+        "praise-wonderful",
+        "praise-superstar",
+        "praise-yay-kaia",
+        "praise-wow",
+      ];
+      voiceManager.speak(
+        praiseKeys[Math.floor(Math.random() * praiseKeys.length)],
+      );
       dispatch({ type: "ADD_STAR" });
     }
   };

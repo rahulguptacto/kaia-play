@@ -4,6 +4,7 @@
  */
 
 import { audioManager } from "./AudioManager";
+import { getVoiceText } from "./voiceManifest";
 
 type VoiceCallback = (speaking: boolean) => void;
 
@@ -63,8 +64,8 @@ class VoiceManager {
       if (played) return;
     }
 
-    // Fallback to Web Speech API
-    this.speakWithSpeechAPI(text || key, pitch, rate);
+    // Fallback to Web Speech API — use manifest text if no explicit text given
+    this.speakWithSpeechAPI(text || getVoiceText(key), pitch, rate);
   }
 
   /**

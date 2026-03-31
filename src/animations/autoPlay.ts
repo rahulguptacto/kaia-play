@@ -3,57 +3,20 @@ import { synthManager } from "../audio/SynthManager";
 
 export interface AutoPlayPhrase {
   voiceKey: string;
-  text: string;
   animation: "wave" | "bounce" | "wiggle" | "spin";
 }
 
 export const autoPlayPhrases: AutoPlayPhrase[] = [
-  {
-    voiceKey: "hi-kaia-i-love-you",
-    text: "Hi Kaia! I love you!",
-    animation: "wave",
-  },
-  {
-    voiceKey: "twinkle-twinkle",
-    text: "Twinkle twinkle little star!",
-    animation: "spin",
-  },
-  {
-    voiceKey: "animal-sounds-mixed",
-    text: "Moo! Quack quack! Woof woof!",
-    animation: "wiggle",
-  },
-  { voiceKey: "abcdefg", text: "A, B, C, D, E, F, G!", animation: "bounce" },
-  {
-    voiceKey: "head-shoulders",
-    text: "Head, shoulders, knees and toes!",
-    animation: "wave",
-  },
-  {
-    voiceKey: "old-macdonald",
-    text: "Old MacDonald had a farm, E I E I O!",
-    animation: "wiggle",
-  },
-  {
-    voiceKey: "kaia-is-a-superstar",
-    text: "Kaia is a superstar!",
-    animation: "spin",
-  },
-  {
-    voiceKey: "one-two-three-four-five",
-    text: "One, two, three, four, five!",
-    animation: "bounce",
-  },
-  {
-    voiceKey: "row-row-row",
-    text: "Row row row your boat!",
-    animation: "wave",
-  },
-  {
-    voiceKey: "baa-baa-black-sheep",
-    text: "Baa baa black sheep!",
-    animation: "wiggle",
-  },
+  { voiceKey: "auto-love", animation: "wave" },
+  { voiceKey: "auto-twinkle", animation: "spin" },
+  { voiceKey: "auto-animals", animation: "wiggle" },
+  { voiceKey: "auto-abc", animation: "bounce" },
+  { voiceKey: "auto-head-shoulders", animation: "wave" },
+  { voiceKey: "auto-superstar", animation: "spin" },
+  { voiceKey: "auto-counting", animation: "bounce" },
+  { voiceKey: "auto-row", animation: "wave" },
+  { voiceKey: "auto-baa", animation: "wiggle" },
+  { voiceKey: "auto-itsy", animation: "wiggle" },
 ];
 
 export function generateAutoPlaySteps(phrase: AutoPlayPhrase): AnimationStep[] {

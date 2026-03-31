@@ -4,7 +4,7 @@
  * Must be created/resumed inside a user gesture handler (tap/click).
  */
 
-import { voiceManifest, priorityKeys } from "./voiceManifest";
+import { voiceManifest, priorityKeys, getVoicePath } from "./voiceManifest";
 
 class AudioManager {
   private ctx: AudioContext | null = null;
@@ -80,7 +80,10 @@ class AudioManager {
 
     // Load priority clips first
     await Promise.allSettled(
-      priorityKeys.map((key) => this.loadClip(key, voiceManifest[key])),
+      priorityKeys.map((key) => {
+        const path = getVoicePath(key);
+        return path ? this.loadClip(key, path) : Promise.resolve();
+      }),
     );
 
     // Load remaining clips
@@ -88,7 +91,7 @@ class AudioManager {
       ([key]) => !priorityKeys.includes(key),
     );
     await Promise.allSettled(
-      remaining.map(([key, url]) => this.loadClip(key, url)),
+      remaining.map(([key, entry]) => this.loadClip(key, entry.file)),
     );
 
     this._voicesLoaded = true;
