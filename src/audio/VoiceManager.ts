@@ -54,7 +54,13 @@ class VoiceManager {
    * @param rate - Web Speech rate (default 1.05)
    */
   speak(key: string, text?: string, pitch = 1.7, rate = 1.05): void {
-    // Try pre-recorded MP3 first
+    // Stop any currently playing voice first — one voice at a time
+    audioManager.stopCurrentClip();
+    try {
+      speechSynthesis.cancel();
+    } catch {}
+
+    // Try pre-recorded clip first
     if (audioManager.hasClip(key)) {
       const played = audioManager.playClip(
         key,

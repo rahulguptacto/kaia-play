@@ -114,18 +114,47 @@ class AudioManager {
   }
 
   /**
-   * Play a pre-loaded voice clip. Returns true if played, false if not available.
+   * Currently playing voice source — only ONE voice at a time.
+   */
+  private currentSource: AudioBufferSourceNode | null = null;
+
+  /**
+   * Stop any currently playing voice clip.
+   */
+  stopCurrentClip(): void {
+    if (this.currentSource) {
+      try {
+        this.currentSource.onended = null;
+        this.currentSource.stop();
+      } catch {
+        // Already stopped
+      }
+      this.currentSource = null;
+    }
+  }
+
+  /**
+   * Play a pre-loaded voice clip. Stops any currently playing clip first.
+   * Returns true if played, false if not available.
    */
   playClip(key: string, onStart?: () => void, onEnd?: () => void): boolean {
     const buffer = this.clips.get(key);
     if (!buffer || !this.ctx || this.ctx.state !== "running") return false;
 
+    // Stop any currently playing voice — one voice at a time
+    this.stopCurrentClip();
+
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(this.ctx.destination);
 
+    this.currentSource = source;
+
     if (onStart) onStart();
     source.onended = () => {
+      if (this.currentSource === source) {
+        this.currentSource = null;
+      }
       if (onEnd) onEnd();
     };
 

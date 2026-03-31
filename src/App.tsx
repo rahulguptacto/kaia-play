@@ -61,15 +61,19 @@ export default function App() {
       dispatch({ type: "SET_SPEAKING", value: speaking });
     });
 
-    // Say hello with the full conversational greeting
-    voiceManager.speak("hello-kaia");
-
     setStarted(true);
+
+    // Say hello — delay to let audio clips start loading
+    // If clip isn't loaded yet, Web Speech API fallback will work
+    setTimeout(() => {
+      voiceManager.speak("hello-kaia");
+    }, 800);
   }, [dispatch]);
 
   // ── Play animation routine on a character ──
+  // speakVoice: if false, skip voice clips (used when multiple characters animate together)
   const playRoutine = useCallback(
-    (charId: CharacterId, steps: AnimationStep[]) => {
+    (charId: CharacterId, steps: AnimationStep[], speakVoice = true) => {
       // Cancel any running animation
       const existing = timeoutsRef.current[charId];
       if (existing) existing.forEach(clearTimeout);
@@ -86,14 +90,9 @@ export default function App() {
           // Sound effect
           if (step.sfx) step.sfx();
 
-          // Voice
-          if (step.voice) {
-            voiceManager.speak(
-              step.voice,
-              step.voice,
-              step.voicePitch,
-              step.voiceRate,
-            );
+          // Voice — only if this character is allowed to speak
+          if (step.voice && speakVoice) {
+            voiceManager.speak(step.voice);
           }
 
           // Overlay
@@ -142,7 +141,8 @@ export default function App() {
       characterIds.forEach((id, j) => {
         setTimeout(() => {
           dispatch({ type: "SET_BUSY", id, busy: true });
-          playRoutine(id, routine());
+          // Only the first character speaks — others just animate silently
+          playRoutine(id, routine(), j === 0);
         }, j * 200);
       });
     },
